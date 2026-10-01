@@ -23,4 +23,7 @@ window.WAYPOINT_CONFIG = {
 
   // How close (metres) counts as "you have arrived"
   ARRIVE_METRES: 20,
+
+  // Relay used by "Send from phone" (free, no account). Leave as is.
+  RELAY_URL: "https://ntfy.sh",
 };

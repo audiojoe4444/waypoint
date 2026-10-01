@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Waypoint">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0b1012">
+  <title>Waypoint – Send to glasses</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <style>
+    :root {
+      --bg: #f4f6f7; --card: #ffffff; --text: #0f1417; --dim: #5d6a73; --line: #dfe4e7;
+      --accent: #0b8f75; --accent-ink: #ffffff; --accent-soft: #e2f5f0; --warn: #b06a00;
+      --radius: 16px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0b1012; --card: #151c20; --text: #eef2f4; --dim: #8d9aa3; --line: #243037;
+        --accent: #4fe3c1; --accent-ink: #00110c; --accent-soft: #10302a; --warn: #ffb547;
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 17px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    }
+    main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+    header { display: flex; align-items: center; gap: 10px; padding: 4px 2px 2px; }
+    header svg { width: 30px; height: 30px; color: var(--accent); flex: none; }
+    header h1 { font-size: 20px; margin: 0; letter-spacing: 0.01em; }
+    header span { color: var(--dim); font-size: 14px; margin-left: auto; }
+
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+    .label { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); margin: 0 0 8px; }
+
+    .pair-row { display: flex; align-items: center; gap: 10px; }
+    .pair-code { font-size: 20px; font-weight: 700; letter-spacing: 0.08em; font-variant-numeric: tabular-nums; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
+    .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    .link-btn { margin-left: auto; background: none; border: 0; color: var(--accent); font: inherit; font-weight: 600; padding: 6px; cursor: pointer; }
+
+    input[type=text], input[type=search] {
+      width: 100%; font: inherit; font-size: 18px; color: var(--text);
+      background: var(--bg); border: 1.5px solid var(--line); border-radius: 12px;
+      padding: 12px 14px; outline: none; -webkit-appearance: none; appearance: none;
+    }
+    input:focus { border-color: var(--accent); }
+    #code-input { text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700; text-align: center; }
+    .row { display: flex; gap: 8px; margin-top: 10px; }
+    .btn {
+      flex: 1; border: 0; border-radius: 12px; padding: 12px 14px; font: inherit; font-weight: 650;
+      background: var(--accent); color: var(--accent-ink); cursor: pointer;
+    }
+    .btn.secondary { background: var(--accent-soft); color: var(--text); }
+    .btn:disabled { opacity: 0.45; }
+
+    .hint { color: var(--dim); font-size: 14px; margin: 8px 2px 0; }
+    .results { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
+    .results li + li { border-top: 1px solid var(--line); }
+    .res {
+      width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+      background: none; border: 0; padding: 12px 4px; font: inherit; color: inherit; cursor: pointer;
+    }
+    .res .t { flex: 1; min-width: 0; }
+    .res .n { display: block; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .res .s { display: block; color: var(--dim); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .res .d { color: var(--dim); font-size: 14px; flex: none; }
+    .res .go { flex: none; font-size: 14px; font-weight: 700; color: var(--accent); }
+    .res:active { background: var(--accent-soft); border-radius: 10px; }
+
+    .toast {
+      position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+      background: var(--text); color: var(--bg); padding: 12px 18px; border-radius: 999px;
+      font-weight: 600; font-size: 15px; box-shadow: 0 6px 24px rgba(0,0,0,0.2); max-width: calc(100% - 32px);
+    }
+    .toast[hidden] { display: none; }
+    details summary { cursor: pointer; color: var(--dim); font-size: 14px; }
+    details ol { padding-left: 20px; color: var(--dim); font-size: 14px; margin: 8px 0 0; }
+    details code { font-size: 12px; word-break: break-all; color: var(--text); }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M32 4C20.4 4 11 13.2 11 24.6 11 40 32 60 32 60s21-20 21-35.4C53 13.2 43.6 4 32 4z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/>
+      <path d="M24 32 L32 16 L40 32 L32 27 Z" fill="currentColor"/>
+    </svg>
+    <h1>Send to glasses</h1>
+    <span>Waypoint</span>
+  </header>
+
+  <!-- Pairing -->
+  <section class="card" id="pair-card">
+    <div id="pair-set" hidden>
+      <div class="pair-row">
+        <div>
+          <div class="label" style="margin:0">Paired with glasses</div>
+          <div class="pair-code" id="pair-code"></div>
+        </div>
+        <button class="link-btn" id="pair-change">Change</button>
+      </div>
+    </div>
+    <div id="pair-new" hidden>
+      <p class="label">Pair with your glasses</p>
+      <input id="code-input" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="ABCD-EFGH">
+      <p class="hint">On the glasses, open Waypoint and press <b>Phone</b> to see your code.</p>
+      <div class="row"><button class="btn" id="pair-save" disabled>Pair</button></div>
+    </div>
+  </section>
+
+  <!-- Search -->
+  <section class="card">
+    <p class="label">Where to?</p>
+    <form id="form" autocomplete="off">
+      <input id="q" type="search" enterkeyhint="search" placeholder="Place, address, postcode or map link" autocomplete="off" autocorrect="off" spellcheck="false">
+    </form>
+    <p class="hint" id="status">Type a place, or paste a link shared from Apple Maps or Google Maps.</p>
+    <ul class="results" id="results"></ul>
+    <div class="row" id="text-row" hidden><button class="btn secondary" id="send-text">Let the glasses search for this text</button></div>
+  </section>
+
+  <section class="card" id="recent-card" hidden>
+    <p class="label">Sent recently</p>
+    <ul class="results" id="recent"></ul>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Send straight from Apple Maps (optional one-time setup)</summary>
+      <ol>
+        <li>Open the <b>Shortcuts</b> app, tap <b>+</b>, and name it <b>Send to Waypoint</b>.</li>
+        <li>Tap the <b>i</b> (or the settings icon), turn on <b>Show in Share Sheet</b>, and set it to receive <b>Locations</b>.</li>
+        <li>Add <b>Get Details of Locations</b> → <b>Latitude</b> (from Shortcut Input). Add it again for <b>Longitude</b>, and again for <b>Name</b>.</li>
+        <li>Add <b>URL Encode</b> on the <b>Name</b> result.</li>
+        <li>Add <b>Open URLs</b> with this text, dropping in the three results where shown:<br>
+          <code id="shortcut-url"></code></li>
+        <li>In Apple Maps, tap a place → <b>Share</b> → <b>Send to Waypoint</b>, then tap <b>Send</b>.</li>
+      </ol>
+    </details>
+  </section>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="config.js"></script>
+<script src="search.js"></script>
+<script>
+(() => {
+  'use strict';
+  const CFG = window.WAYPOINT_CONFIG || {};
+  const RELAY = String(CFG.RELAY_URL || 'https://ntfy.sh').replace(/\/+$/, '');
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('wps.' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('wps.' + k, JSON.stringify(v)); } catch {} },
+  };
+  const metric = CFG.UNITS !== 'imperial';
+  const fmtDist = (m) => {
+    if (!Number.isFinite(m)) return '';
+    if (!metric) { const mi = m / 1609.344; return mi < 0.2 ? Math.round(m * 1.0936 / 10) * 10 + ' yd' : mi.toFixed(mi < 10 ? 1 : 0) + ' mi'; }
+    return m < 1000 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km';
+  };
+
+  let toastT;
+  function toast(msg, ms = 2600) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms); }
+
+  // ---------- pairing
+  const cleanCode = (s) => String(s || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  let code = store.get('code', '');
+  function renderPair() {
+    $('pair-set').hidden = !code;
+    $('pair-new').hidden = !!code;
+    if (code) $('pair-code').textContent = code.slice(0, 4) + '-' + code.slice(4);
+  }
+  $('code-input').addEventListener('input', (e) => {
+    const c = cleanCode(e.target.value).slice(0, 8);
+    e.target.value = c.length > 4 ? c.slice(0, 4) + '-' + c.slice(4) : c;
+    $('pair-save').disabled = c.length !== 8;
+  });
+  $('pair-save').addEventListener('click', () => {
+    code = cleanCode($('code-input').value).slice(0, 8);
+    if (code.length !== 8) return;
+    store.set('code', code);
+    renderPair();
+    send({ q: '', ping: true }, true).then((ok) => toast(ok ? 'Paired. Now pick a place.' : 'Saved, but the glasses relay didn’t answer.'));
+    $('q').focus();
+  });
+  $('pair-change').addEventListener('click', () => { code = ''; store.set('code', ''); $('code-input').value = ''; $('pair-save').disabled = true; renderPair(); $('code-input').focus(); });
+
+  // ---------- sending
+  async function send(payload, silent = false) {
+    if (!code) { toast('Pair with your glasses first'); $('code-input').focus(); return false; }
+    try {
+      const res = await fetch(`${RELAY}/waypoint-${code.toLowerCase()}`, { method: 'POST', body: JSON.stringify(Object.assign({ v: 1 }, payload)) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!silent) {
+        toast('Sent to glasses ✓');
+        if (navigator.vibrate) navigator.vibrate(30);
+      }
+      return true;
+    } catch (e) {
+      toast('Couldn’t send: ' + e.message, 4000);
+      return false;
+    }
+  }
+
+  async function sendPlace(p) {
+    const ok = await send({ name: p.name, sub: p.sub || '', lat: +p.lat.toFixed(6), lon: +p.lon.toFixed(6) });
+    if (!ok) return;
+    const r = [{ name: p.name, sub: p.sub || '', lat: p.lat, lon: p.lon }, ...store.get('recent', []).filter((x) => Math.abs(x.lat - p.lat) > 1e-4 || Math.abs(x.lon - p.lon) > 1e-4)].slice(0, 6);
+    store.set('recent', r);
+    renderRecent();
+  }
+
+  // ---------- results
+  function resultItem(p, near) {
+    const li = document.createElement('li');
+    const d = near ? fmtDist(Number.isFinite(p.dist) ? p.dist : WPSearch.distM(near, p)) : '';
+    li.innerHTML = `<button class="res"><span class="t"><span class="n">${esc(p.name)}</span>` +
+      (p.sub ? `<span class="s">${esc(p.sub)}</span>` : '') + `</span>` +
+      (d ? `<span class="d">${esc(d)}</span>` : '') + `<span class="go">Send</span></button>`;
+    li.firstChild.addEventListener('click', () => sendPlace(p));
+    return li;
+  }
+
+  function renderRecent() {
+    const r = store.get('recent', []);
+    $('recent-card').hidden = !r.length;
+    $('recent').replaceChildren(...r.map((p) => resultItem(p, near)));
+  }
+
+  // ---------- location (for "near me" ranking)
+  let near = null;
+  let locAsked = false;
+  function askLocation() {
+    if (locAsked || !('geolocation' in navigator)) return;
+    locAsked = true;
+    navigator.geolocation.getCurrentPosition((pos) => { near = { lat: pos.coords.latitude, lon: pos.coords.longitude }; renderRecent(); },
+      () => {}, { timeout: 10000, maximumAge: 300000 });
+  }
+
+  // ---------- search
+  let seq = 0, timer = null;
+  async function run(text, full) {
+    const my = ++seq;
+    text = String(text || '').trim();
+    $('text-row').hidden = true;
+    if (!text) { $('results').replaceChildren(); $('status').textContent = 'Type a place, or paste a link shared from Apple Maps or Google Maps.'; return; }
+
+    const link = WPSearch.parseMapLink(text);
+    if (link && link.short) {
+      $('results').replaceChildren();
+      $('status').textContent = link.apple
+        ? 'That’s a short Apple Maps link, which can’t be opened here. Use the Send to Waypoint shortcut below, or type the place name.'
+        : 'Short Google links can’t be opened here. In Google Maps, copy the place’s address and paste that instead.';
+      return;
+    }
+    if (link && Number.isFinite(link.lat)) {
+      $('status').textContent = 'Place from your link:';
+      $('results').replaceChildren(resultItem(link, near));
+      return;
+    }
+    if (link && link.text) text = link.text;
+
+    $('status').textContent = 'Searching…';
+    try {
+      let list;
+      if (full) { const res = await WPSearch.find(text, near); list = res.results; }
+      else list = await WPSearch.live(text, near);
+      if (my !== seq) return;
+      $('results').replaceChildren(...list.map((p) => resultItem(p, near)));
+      $('status').textContent = list.length ? 'Tap a place to send it to your glasses.' : 'No matches yet — keep typing, or press Search.';
+      $('text-row').hidden = false;
+    } catch (e) {
+      if (my !== seq) return;
+      $('status').textContent = 'Search failed: ' + e.message;
+      $('text-row').hidden = false;
+    }
+  }
+
+  $('q').addEventListener('focus', askLocation, { once: true });
+  $('q').addEventListener('input', (e) => { clearTimeout(timer); timer = setTimeout(() => run(e.target.value, false), 350); });
+  $('form').addEventListener('submit', (e) => { e.preventDefault(); clearTimeout(timer); $('q').blur(); run($('q').value, true); });
+  $('send-text').addEventListener('click', () => { const t = $('q').value.trim(); if (t) send({ q: t }); });
+
+  // ---------- boot
+  const here = location.origin + location.pathname;
+  $('shortcut-url').textContent = here + '?lat=[Latitude]&lon=[Longitude]&name=[URL Encoded Text]';
+  renderPair();
+  renderRecent();
+  const qs = new URLSearchParams(location.search);
+  const qlat = parseFloat(qs.get('lat')), qlon = parseFloat(qs.get('lon'));
+  const incoming = qs.get('text') || qs.get('url');
+  if (Number.isFinite(qlat) && Number.isFinite(qlon)) {
+    const p = { name: (qs.get('name') || 'Pinned location').trim(), sub: '', lat: qlat, lon: qlon };
+    $('status').textContent = 'Place from Apple Maps:';
+    $('results').replaceChildren(resultItem(p, near));
+    history.replaceState(null, '', location.pathname);
+  } else if (incoming) { $('q').value = incoming; askLocation(); run(incoming, true); history.replaceState(null, '', location.pathname); }
+  else if (code) setTimeout(() => $('q').focus(), 300);
+})();
+</script>
+</body>
+</html>

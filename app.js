@@ -205,56 +205,6 @@
     stop() { clearInterval(Sim.timer); Sim.timer = null; },
   };
 
-  // ------------------------------------------------------------------ search providers
-  async function searchPlaces(q, near) {
-    if (USE_MAPBOX) return searchMapbox(q, near);
-    try { return await searchPhoton(q, near); }
-    catch (e) { console.warn('Photon failed, trying Nominatim', e); return searchNominatim(q, near); }
-  }
-
-  async function searchPhoton(q, near) {
-    const lang = /^en/i.test(CFG.LANGUAGE) ? 'en' : 'default';
-    let url = 'https://photon.komoot.io/api/?limit=8&lang=' + lang + '&q=' + encodeURIComponent(q);
-    if (near) url += '&lat=' + near.lat.toFixed(5) + '&lon=' + near.lon.toFixed(5);
-    const data = await fetchJSON(url);
-    return (data.features || []).map((f) => {
-      const p = f.properties || {};
-      const street = [p.housenumber, p.street].filter(Boolean).join(' ');
-      const name = p.name || street || p.city || p.county || 'Unnamed place';
-      const parts = [p.name ? street : null, p.district || p.locality, p.city, p.postcode]
-        .filter((x) => x && x !== name);
-      return { name, sub: [...new Set(parts)].join(', '), lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
-    });
-  }
-
-  async function searchNominatim(q, near) {
-    let url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&q=' + encodeURIComponent(q);
-    if (near) {
-      const d = 0.3;
-      url += '&viewbox=' + [near.lon - d, near.lat + d, near.lon + d, near.lat - d].map((n) => n.toFixed(4)).join(',');
-    }
-    const data = await fetchJSON(url, { headers: { 'Accept-Language': CFG.LANGUAGE } });
-    return (data || []).map((r) => {
-      const bits = String(r.display_name || '').split(',').map((s) => s.trim());
-      const name = r.name || bits[0];
-      return { name, sub: bits.filter((b) => b !== name).slice(0, 3).join(', '), lat: +r.lat, lon: +r.lon };
-    });
-  }
-
-  async function searchMapbox(q, near) {
-    let url = 'https://api.mapbox.com/search/searchbox/v1/forward?limit=8&language=' +
-      CFG.LANGUAGE.split('-')[0] + '&q=' + encodeURIComponent(q) + '&access_token=' + TOKEN;
-    if (near) url += '&proximity=' + near.lon.toFixed(5) + ',' + near.lat.toFixed(5);
-    const data = await fetchJSON(url);
-    return (data.features || []).map((f) => {
-      const p = f.properties || {};
-      const c = p.coordinates || {};
-      const lat = finite(c.latitude) ? c.latitude : f.geometry.coordinates[1];
-      const lon = finite(c.longitude) ? c.longitude : f.geometry.coordinates[0];
-      return { name: p.name || p.full_address || 'Unnamed place', sub: p.place_formatted || p.full_address || '', lat, lon };
-    });
-  }
-
   // ------------------------------------------------------------------ routing providers
   // Every provider returns the same shape:
   // { shape:[[lat,lon]], cum:[m], total, duration, steps:[{kind,text,verbal,street,beginIdx}] }
@@ -469,8 +419,9 @@
   function focusScreen(name) {
     requestAnimationFrame(() => {
       let el = null;
-      if (name === 'home') el = document.querySelector('#fav-list .item, #recent-list .item') || $('search-input');
-      if (name === 'results') el = document.querySelector('#results-list .item') || document.querySelector('#screen-results .back');
+      if (name === 'home') el = $('search-input');
+      if (name === 'results') el = document.querySelector('#results-list .item') || $('research-input');
+      if (name === 'phone') el = document.querySelector('#screen-phone .btn');
       if (name === 'preview') el = $('btn-go').disabled ? document.querySelector('#screen-preview .back') : $('btn-go');
       if (name === 'nav') el = $('nav-menu').hidden ? $('nav-focus') : document.querySelector('#nav-menu .btn');
       if (name === 'arrive') el = document.querySelector('#screen-arrive .btn');
@@ -553,38 +504,179 @@
   }
 
   // ------------------------------------------------------------------ search
+  // The heavy lifting (postcode fixing, categories, multi-service matching)
+  // lives in search.js so the phone page can share it.
+  let searchSeq = 0;
   let lastQuery = { q: '', at: 0 };
-  async function doSearch(q) {
-    q = (q || '').trim();
-    if (!q) return;
-    if (q === lastQuery.q && Date.now() - lastQuery.at < 1500) return;
-    lastQuery = { q, at: Date.now() };
 
-    $('results-title').textContent = q;
+  function showResults(list, near, status) {
+    $('results-status').textContent = status || '';
+    $('results-list').replaceChildren(...list.map((p) => {
+      const meta = near ? fmtDist(finite(p.dist) ? p.dist : haversine([near.lat, near.lon], [p.lat, p.lon])) : '';
+      return placeButton(p, p.src === 'postcode' ? 'pin' : 'pin', meta);
+    }));
+    if (current === 'results') focusScreen('results');
+  }
+
+  async function doSearch(raw, mode = 'push') {
+    raw = (raw || '').trim();
+    if (!raw) return;
+    if (raw === lastQuery.q && Date.now() - lastQuery.at < 1500) return;
+    lastQuery = { q: raw, at: Date.now() };
+    const seq = ++searchSeq;
+
+    $('research-input').value = raw;
+    $('results-heard').hidden = true;
     $('results-status').textContent = 'Searching…';
     $('results-list').replaceChildren();
-    show('results');
+    show('results', current === 'results' ? 'replace' : mode);
 
     let near = null;
     try { near = await Loc.getOnce(8000); } catch { /* search without location bias */ }
 
     try {
-      const res = await searchPlaces(q, near);
-      if (!res.length) { $('results-status').textContent = 'No places found. Try a different name or a postcode.'; return; }
-      $('results-status').textContent = near ? '' : 'Location unavailable — results may be far away.';
-      $('results-list').replaceChildren(...res.map((p) => {
-        const meta = near ? fmtDist(haversine([near.lat, near.lon], [p.lat, p.lon])) : '';
-        return placeButton(p, 'pin', meta);
-      }));
-      focusScreen('results');
+      const res = await WPSearch.find(raw, near);
+      if (seq !== searchSeq) return;
+      // Show what the glasses heard, and what we actually searched for.
+      const heard = $('results-heard');
+      const changed = res.searched && WPSearch.clean(res.heard).toLowerCase() !== res.searched.toLowerCase();
+      heard.innerHTML = changed ? `Heard “${esc(res.heard)}” → <b>${esc(res.searched)}</b>` : '';
+      heard.hidden = !changed;
+
+      if (!res.results.length) {
+        showResults([], near, res.kind === 'postcode' ? 'That postcode wasn’t found. Try saying it letter by letter.'
+          : 'No places found. Try again, add the town, or send it from your phone.');
+        Voice.say('Nothing found.', true);
+        return;
+      }
+      showResults(res.results, near, near ? '' : 'Location unavailable — results may be far away.');
+      const top = res.results[0];
+      const d = near ? ', ' + spokenDist(finite(top.dist) ? top.dist : haversine([near.lat, near.lon], [top.lat, top.lon])) : '';
+      Voice.say((res.results.length > 1 ? 'Top result: ' : '') + top.name + d + '.', true);
     } catch (e) {
+      if (seq !== searchSeq) return;
       console.error(e);
       $('results-status').textContent = 'Search failed: ' + e.message;
     }
   }
 
+  async function doCategory(key) {
+    const cat = WPSearch.CATEGORIES.find((c) => c.key === key);
+    if (!cat) return;
+    const seq = ++searchSeq;
+    $('research-input').value = '';
+    $('results-heard').innerHTML = `Nearest <b>${esc(cat.label.toLowerCase())}</b>`;
+    $('results-heard').hidden = false;
+    $('results-status').textContent = 'Looking nearby…';
+    $('results-list').replaceChildren();
+    show('results');
+    try {
+      const near = await Loc.getOnce(10000);
+      const list = await WPSearch.category(key, near);
+      if (seq !== searchSeq) return;
+      showResults(list, near, list.length ? '' : 'Nothing found within 2.5 km.');
+    } catch (e) {
+      if (seq !== searchSeq) return;
+      $('results-status').textContent = e.message || 'Nearby search failed.';
+    }
+  }
+
+  function renderChips() {
+    $('chips').replaceChildren(...WPSearch.CATEGORIES.map((c) => {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.textContent = c.label;
+      b.addEventListener('click', () => doCategory(c.key));
+      return b;
+    }));
+  }
+
   $('search-form').addEventListener('submit', (e) => { e.preventDefault(); doSearch($('search-input').value); });
   $('search-input').addEventListener('change', () => doSearch($('search-input').value));
+  $('research-form').addEventListener('submit', (e) => { e.preventDefault(); doSearch($('research-input').value, 'replace'); });
+  $('research-input').addEventListener('change', () => doSearch($('research-input').value, 'replace'));
+
+  // ------------------------------------------------------------------ send from phone (relay)
+  // The phone page publishes a place to a private ntfy.sh topic named after
+  // your pairing code; the glasses listen on the same topic.
+  const Relay = {
+    base: String(CFG.RELAY_URL || 'https://ntfy.sh').replace(/\/+$/, ''),
+    code: null, es: null, connected: false, seen: store.get('relaySeen', []),
+
+    newCode() {
+      const A = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+      const r = new Uint32Array(8);
+      (window.crypto || {}).getRandomValues ? crypto.getRandomValues(r) : r.forEach((_, i) => { r[i] = Math.random() * 1e9; });
+      return Array.from(r, (n) => A[n % A.length]).join('');
+    },
+    topic() { return 'waypoint-' + Relay.code.toLowerCase(); },
+    pretty() { return Relay.code.slice(0, 4) + '-' + Relay.code.slice(4); },
+
+    start(reset = false) {
+      if (reset || !store.get('pairCode', null)) store.set('pairCode', Relay.newCode());
+      Relay.code = store.get('pairCode', null);
+      if (Relay.es) { Relay.es.close(); Relay.es = null; }
+      Relay.setStatus(false);
+      // Anything sent while the app was closed (last 15 min)?
+      fetch(`${Relay.base}/${Relay.topic()}/json?poll=1&since=15m`).then((r) => r.text()).then((txt) => {
+        const msgs = txt.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((m) => m && m.event === 'message');
+        const fresh = msgs.filter((m) => !Relay.seen.includes(m.id));
+        fresh.forEach((m) => Relay.markSeen(m.id));
+        if (fresh.length) Relay.deliver(fresh[fresh.length - 1]);
+      }).catch(() => {});
+      if (!('EventSource' in window)) return;
+      try {
+        const es = new EventSource(`${Relay.base}/${Relay.topic()}/sse`);
+        es.onopen = () => Relay.setStatus(true);
+        es.onerror = () => Relay.setStatus(false);
+        es.onmessage = (e) => {
+          let m; try { m = JSON.parse(e.data); } catch { return; }
+          Relay.setStatus(true);
+          if (m.event !== 'message' || Relay.seen.includes(m.id)) return;
+          Relay.markSeen(m.id);
+          Relay.deliver(m);
+        };
+        Relay.es = es;
+      } catch (e) { console.warn('relay', e); }
+    },
+
+    markSeen(id) { Relay.seen = [id, ...Relay.seen].slice(0, 30); store.set('relaySeen', Relay.seen); },
+
+    setStatus(on) {
+      Relay.connected = on;
+      const el = $('phone-status');
+      if (!el) return;
+      el.classList.toggle('on', on);
+      $('phone-status-text').textContent = on ? 'Ready — waiting for your phone' : 'Connecting…';
+    },
+
+    deliver(m) {
+      if (m.time && Date.now() / 1000 - m.time > 15 * 60) return;
+      let p; try { p = JSON.parse(m.message); } catch { p = { q: m.message }; }
+      if (!p) return;
+      if (p.ping) { toast('Phone paired ✓', 3000); Voice.say('Phone paired.'); return; }
+      const place = (finite(p.lat) && finite(p.lon)) ? { name: p.name || 'Pinned location', sub: p.sub || '', lat: p.lat, lon: p.lon } : null;
+      const label = place ? place.name : p.q;
+      if (!label) return;
+      if (nav && nav.active) {
+        if (place) addRecent(place);
+        toast('From phone: ' + label + (place ? ' (in Recent)' : ''), 5000);
+        return;
+      }
+      Voice.say('From your phone: ' + label + '.', true);
+      if (place) openPreview(place, current === 'preview' ? 'replace' : 'push');
+      else doSearch(p.q);
+    },
+  };
+
+  function openPhone() {
+    const dir = location.origin + location.pathname.replace(/[^/]*$/, '');
+    $('phone-url').textContent = (dir + 'send.html').replace(/^https?:\/\//, '');
+    $('phone-code').textContent = Relay.pretty();
+    Relay.setStatus(Relay.connected);
+    show('phone');
+  }
 
   // ------------------------------------------------------------------ preview
   let preview = null; // { place, route, from }
@@ -594,7 +686,7 @@
     $('btn-save').textContent = saved ? '★ Saved' : '☆ Save';
   }
 
-  async function openPreview(place) {
+  async function openPreview(place, mode = 'push') {
     preview = { place, route: null, from: null };
     $('pv-name').textContent = place.name;
     $('pv-addr').textContent = place.sub || '';
@@ -602,7 +694,7 @@
     $('pv-status').textContent = 'Finding a walking route…';
     $('btn-go').disabled = true;
     updateSaveBtn();
-    show('preview');
+    show('preview', mode);
 
     const token = preview;
     try {
@@ -958,6 +1050,8 @@
       else if (a === 'reroute') { closeMenu(); reroute(nav && nav.pos); }
       else if (a === 'end') endRoute();
       else if (a === 'done') { nav = null; goHome(); }
+      else if (a === 'phone') openPhone();
+      else if (a === 'newcode') { Relay.start(true); $('phone-code').textContent = Relay.pretty(); toast('New code — enter it on your phone'); }
       return;
     }
     if (e.target.id === 'nav-focus') openMenu();
@@ -983,7 +1077,9 @@
   }
   history.replaceState({ s: 'home', d: 0 }, '', location.pathname + location.search + '#home');
   renderHome();
+  renderChips();
   show('home', 'none');
+  Relay.start();
   if (DEMO) toast('Demo mode: walking is simulated', 3000);
   console.info('Waypoint', USE_MAPBOX ? 'using Mapbox' : 'using OpenStreetMap (Photon + Valhalla)', DEMO ? '[demo]' : '');
 })();

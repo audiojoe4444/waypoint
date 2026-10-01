@@ -64,6 +64,43 @@ button { font: inherit; color: inherit; }
 .brand-mark { width: 1.9rem; height: 1.9rem; }
 .brand-name { font-weight: 700; font-size: 1.25rem; letter-spacing: 0.02em; color: var(--text); }
 
+/* ---------- header buttons, chips ---------- */
+.icon-btn {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  border: 0; border-radius: 999px;
+  background: var(--surface);
+  padding: 0.4rem 0.8rem 0.4rem 0.6rem;
+  font-size: 0.85rem; font-weight: 600; color: var(--text);
+  cursor: pointer;
+}
+.icon-btn svg { width: 1.15rem; height: 1.15rem; color: var(--accent); }
+
+.chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+.chip {
+  border: 0; border-radius: 999px;
+  background: var(--surface);
+  padding: 0.45rem 0.2rem;
+  font-size: 0.85rem; font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chip:focus-visible { background: var(--surface-2); color: var(--accent); }
+
+.heard { margin: -0.3rem 0.2rem 0; font-size: 0.85rem; color: var(--dim); }
+.heard b { color: var(--text); font-weight: 600; }
+.grow { flex: 1 1 auto; }
+.topbar .search input { font-size: 1.05rem; padding: 0.5rem 0.9rem; }
+
+/* ---------- phone pairing ---------- */
+.phone-body { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 0.2rem; }
+.phone-body .hint { margin: 0.2rem; }
+.phone-url { margin: 0; font-size: 1rem; font-weight: 600; color: var(--text); word-break: break-all; }
+.phone-code { margin: 0.2rem 0 0.4rem; font-size: 2.8rem; font-weight: 800; letter-spacing: 0.08em; color: var(--accent); font-variant-numeric: tabular-nums; }
+.phone-status { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; color: var(--dim); margin: 0.3rem 0 0; }
+.phone-status .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--warn); }
+.phone-status.on .dot { background: var(--accent); }
+
 /* ---------- search ---------- */
 .search input {
   width: 100%;

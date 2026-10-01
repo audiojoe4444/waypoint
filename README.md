@@ -8,12 +8,33 @@ Built from the [Meta Wearables Web Apps docs](https://wearables.developer.meta.c
 
 | Screen | Controls |
 |---|---|
-| Home | Select **Where to?** and say or write a place, address or postcode. Saved and Recent places sit underneath. |
-| Results | Swipe up/down, then pinch to pick one. |
+| Home | Select **Where to?** and say or write a place, address or postcode. Or pick a quick category (Coffee, Food, Pub, Station, Shop, Pharmacy, Cash, Toilets) to see the nearest ones. **Phone** shows your pairing code. Saved and Recent places sit underneath. |
+| Results | Shows what the glasses heard and what was searched (e.g. *Heard "sw one a two a a" → SW1A 2AA*), and reads the top result aloud. Swipe up or down, then pinch to pick one, or use the box at the top to search again. |
 | Route | Shows walk time, distance and arrival time. **Go** starts navigation. **☆ Save** adds the place to Saved. |
 | Navigating | **Left/Right** previews earlier or later turns (it snaps back after 8 seconds). **Up/Down** zooms the map. **Pinch** opens the menu: Resume, Voice on/off, Map facing-up or north-up, Re-plan route, End route. Back also opens the menu, so you can't end a route by accident. |
 
 If you go off the route by more than about 30 m, it plans a new one for you.
+
+## Finding places
+
+- **Postcodes:** whatever the glasses hear ("sw one a two a a", "S.W.1A2AA", "sw1a zaa", "double you see two aitch…", even the NATO alphabet) is cleaned up, checked against [postcodes.io](https://postcodes.io), the free official UK postcode data, and shown with its street name.
+- **Categories:** say "nearest chemist", "loo", "coffee" or "tube", or tap a chip, for the closest places. These come from OpenStreetMap via Overpass.
+- **Names:** filler words like "take me to" are removed. Then Mapbox (if you have a key), Photon and Nominatim are searched together, duplicates are merged, and results are ranked by how good the match is and how close it is. If nothing matches, it tries again without words that were probably misheard.
+
+## Send from phone
+
+Typing on a phone is far easier than dictating to glasses.
+
+1. On the glasses, press **Phone**. You'll see a web address and an 8-character code.
+2. On your iPhone, open that address (`https://<you>.github.io/waypoint/send.html`) in Safari. Tap **Share → Add to Home Screen** so it's one tap away next time.
+3. Enter the code once. The glasses say "Phone paired".
+4. Type a place (results appear as you type) or paste an Apple Maps or Google Maps link, then tap **Send**. Waypoint opens the route on the glasses.
+
+If the glasses app is closed when you send, the place is waiting for you when you open it, for up to 15 minutes. If you're already navigating, it goes into Recent instead of interrupting.
+
+The page also explains an optional iPhone Shortcut so you can send straight from Apple Maps' **Share** button.
+
+Messages go through [ntfy.sh](https://ntfy.sh), a free relay with no account needed. Your code is the private channel name, so press **New code** on the glasses any time to change it.
 
 ## Navigation services
 
@@ -24,7 +45,14 @@ If you go off the route by more than about 30 m, it plans a new one for you.
 
 The free OpenStreetMap servers are community-run and meant for light personal use. Mapbox gives better place search (shops, businesses) and has a free tier that is plenty for one person.
 
-**To switch to Mapbox:** create a free account at mapbox.com, copy your *default public token* (it starts with `pk.`), then on GitHub open `config.js`, click the pencil, paste it between the quotes on `MAPBOX_TOKEN: ""`, and commit. In your Mapbox token settings you can restrict the token to your `https://<you>.github.io` URL.
+**To switch to Mapbox:**
+
+1. Sign up at [mapbox.com](https://account.mapbox.com/auth/signup/) and choose **Start without a credit card**.
+2. On your account page, copy the **Default public token** (it starts with `pk.`).
+3. On GitHub, open `config.js`, click the pencil, paste the token between the quotes on `MAPBOX_TOKEN: ""`, and commit.
+4. Optional: in Mapbox → **Tokens**, create a token restricted to the URL `https://<you>.github.io/` and use that one instead.
+
+Free monthly allowance: 50,000 searches and 100,000 routes, far more than one person uses.
 
 You can change the other settings in `config.js` the same way: units (`metric` or `imperial`), language, voice on/off, the off-route distance and the arrival distance.
 
@@ -47,11 +75,14 @@ Open `https://<you>.github.io/waypoint/?demo` in Chrome. It starts you at Trafal
 ## Files
 
 ```
-index.html                              screens
+index.html                              glasses screens
+send.html                               phone companion page
+search.js                               search engine (postcodes, categories, names, map links)
 style.css                               styles for the additive display
 app.js                                  search, routing, tracking, voice, mini map
 config.js                               your settings (Mapbox token, units…)
 icons/icon.svg                          monochrome app icon
+icons/apple-touch-icon.png              iPhone Home Screen icon
 .well-known/meta-wearables-manifest.json  name + icon for the glasses launcher
 .nojekyll                               lets GitHub Pages serve .well-known
 ```
