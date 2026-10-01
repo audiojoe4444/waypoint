@@ -133,50 +133,113 @@
   }
 
   // ------------------------------------------------------------------ location
+  // One shared watch runs while the app is open (so a fix is usually ready),
+  // backed up by one-shot requests and, failing that, the phone's location
+  // sent over from the companion page.
   const Loc = {
-    last: null,      // {lat, lon, accuracy, heading, speed, t}
-    watchId: null,
+    last: null,        // best glasses fix {lat, lon, accuracy, heading, speed, t, src}
+    phone: null,       // last location reported by the phone page
     lastFixAt: 0,
+    watchId: null,
+    listeners: new Set(),
+    waiters: [],
+    status: { state: 'idle', msg: 'Not started', code: null, at: 0 },
+    perm: 'unknown',
+    fixes: 0,
 
-    norm(pos) {
+    norm(pos, src = 'glasses') {
       const c = pos.coords;
-      return { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, heading: c.heading, speed: c.speed, t: Date.now() };
+      return { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, heading: c.heading, speed: c.speed, t: Date.now(), src };
     },
 
-    getOnce(timeout = 15000) {
+    setStatus(state, msg, code = null) {
+      Loc.status = { state, msg, code, at: Date.now() };
+      renderLocBadge();
+    },
+
+    onFix(pos) {
+      Loc.last = Loc.norm(pos);
+      Loc.lastFixAt = Date.now();
+      Loc.fixes++;
+      Loc.setStatus('ok', 'Location found');
+      Loc.waiters.splice(0).forEach((w) => w.resolve(Loc.last));
+      Loc.listeners.forEach((cb) => cb(Loc.last));
+    },
+
+    onError(err) {
+      const code = err && err.code;
+      const st = code === 1 ? 'denied' : code === 3 ? 'timeout' : 'unavailable';
+      // Don't let a passing hiccup hide a working fix.
+      if (Loc.last && Date.now() - Loc.lastFixAt < 30000 && code !== 1) return;
+      Loc.setStatus(st, locError(err) + (err && err.message ? ' (' + err.message + ')' : ''), code);
+      if (code === 1) Loc.waiters.splice(0).forEach((w) => w.reject(new Error(locError(err))));
+    },
+
+    // Start (or restart) listening. Safe to call repeatedly.
+    ensure(restart = false) {
+      if (DEMO) return;
+      if (!('geolocation' in navigator)) { Loc.setStatus('unsupported', 'This browser has no location support.'); return; }
+      if (restart && Loc.watchId != null) { navigator.geolocation.clearWatch(Loc.watchId); Loc.watchId = null; }
+      if (Loc.watchId == null) {
+        if (Loc.status.state !== 'ok') Loc.setStatus('searching', 'Looking for your location…');
+        try {
+          Loc.watchId = navigator.geolocation.watchPosition(Loc.onFix, Loc.onError, { enableHighAccuracy: true });
+        } catch (e) { Loc.setStatus('unavailable', 'Location error: ' + e.message); }
+      }
+      // A one-shot request as well — some runtimes answer one but not the other.
+      try { navigator.geolocation.getCurrentPosition(Loc.onFix, Loc.onError, { timeout: 15000 }); } catch { /* ignore */ }
+      Loc.checkPermission();
+    },
+
+    async checkPermission() {
+      try {
+        if (!navigator.permissions || !navigator.permissions.query) return;
+        const p = await navigator.permissions.query({ name: 'geolocation' });
+        Loc.perm = p.state;
+        p.onchange = () => { Loc.perm = p.state; renderLocBadge(); if (p.state === 'granted') Loc.ensure(true); };
+        renderLocBadge();
+      } catch { /* not supported */ }
+    },
+
+    fresh(maxAge = 60000) { return Loc.last && Date.now() - Loc.last.t < maxAge ? Loc.last : null; },
+    phoneFresh() { return Loc.phone && Date.now() - Loc.phone.t < 10 * 60000 ? Loc.phone : null; },
+
+    // Resolves with a fix, or the phone's location, or rejects — never hangs.
+    getOnce(timeout = 12000, { allowPhone = true } = {}) {
       if (DEMO) return Promise.resolve(Sim.current());
-      if (Loc.last && Date.now() - Loc.last.t < 20000) return Promise.resolve(Loc.last);
+      const f = Loc.fresh();
+      if (f) return Promise.resolve(f);
+      Loc.ensure();
+      // Already have the phone's position? Only give the glasses a few seconds.
+      if (allowPhone && Loc.phoneFresh()) timeout = Math.min(timeout, 3000);
       return new Promise((resolve, reject) => {
-        if (!('geolocation' in navigator)) return reject(new Error('Location is not available on this device.'));
-        navigator.geolocation.getCurrentPosition(
-          (pos) => { Loc.last = Loc.norm(pos); Loc.lastFixAt = Date.now(); resolve(Loc.last); },
-          (err) => reject(new Error(locError(err))),
-          { timeout }
-        );
+        const w = { resolve: (v) => { clearTimeout(w.t); resolve(v); }, reject: (e) => { clearTimeout(w.t); reject(e); } };
+        w.t = setTimeout(() => {
+          Loc.waiters = Loc.waiters.filter((x) => x !== w);
+          const ph = allowPhone && Loc.phoneFresh();
+          if (Loc.last && Date.now() - Loc.last.t < 10 * 60000) resolve(Loc.last);   // older fix beats nothing
+          else if (ph) resolve(ph);
+          else reject(new Error(Loc.status.state === 'denied' ? locError({ code: 1 }) : 'Can’t find your location yet.'));
+        }, timeout);
+        Loc.waiters.push(w);
       });
     },
 
     watch(cb) {
-      Loc.stop();
       if (DEMO) { Sim.start(cb); return; }
-      if (!('geolocation' in navigator)) return;
-      Loc.watchId = navigator.geolocation.watchPosition(
-        (pos) => { Loc.last = Loc.norm(pos); Loc.lastFixAt = Date.now(); cb(Loc.last); },
-        (err) => { if (err && err.code === 1) toast(locError(err), 4000); }, // brief dropouts: the GPS badge covers it
-        { enableHighAccuracy: true }
-      );
+      Loc.listeners.add(cb);
+      Loc.ensure();
     },
 
     stop() {
       if (DEMO) Sim.stop();
-      if (Loc.watchId != null) navigator.geolocation.clearWatch(Loc.watchId);
-      Loc.watchId = null;
+      Loc.listeners.clear();   // the background watch keeps running so a fix stays warm
     },
   };
 
   function locError(err) {
     if (!err) return 'Location unavailable.';
-    if (err.code === 1) return 'Location permission is off. Allow location for the Meta AI app on your phone.';
+    if (err.code === 1) return 'Location is blocked. On your iPhone: Settings → Meta AI → Location → Always, with Precise Location on.';
     if (err.code === 3) return 'Still looking for your location…';
     return 'Can’t get your location right now. Is your phone connected?';
   }
@@ -422,6 +485,7 @@
       if (name === 'home') el = $('search-input');
       if (name === 'results') el = document.querySelector('#results-list .item') || $('research-input');
       if (name === 'phone') el = document.querySelector('#screen-phone .btn');
+      if (name === 'loc') el = document.querySelector('#screen-loc .btn');
       if (name === 'preview') el = $('btn-go').disabled ? document.querySelector('#screen-preview .back') : $('btn-go');
       if (name === 'nav') el = $('nav-menu').hidden ? $('nav-focus') : document.querySelector('#nav-menu .btn');
       if (name === 'arrive') el = document.querySelector('#screen-arrive .btn');
@@ -503,6 +567,43 @@
     $('home-empty').hidden = !!(f.length || r.length);
   }
 
+  // ------------------------------------------------------------------ location badge + help screen
+  function ago(t) {
+    const s = Math.round((Date.now() - t) / 1000);
+    return s < 60 ? s + ' s ago' : s < 3600 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago';
+  }
+
+  function renderLocBadge() {
+    const b = $('loc-badge');
+    if (!b) return;
+    const st = Loc.status.state, f = Loc.fresh(120000);
+    let text = 'Location', cls = '';
+    if (DEMO) { text = 'Demo'; cls = 'ok'; }
+    else if (f) { text = '±' + Math.round(f.accuracy || 0) + ' m'; cls = 'ok'; }
+    else if (st === 'denied') { text = 'Blocked'; cls = 'bad'; }
+    else if (Loc.phoneFresh()) { text = 'Phone loc'; cls = 'ok'; }
+    else if (st === 'searching' || st === 'idle') text = 'Locating…';
+    else { text = 'No GPS'; cls = 'bad'; }
+    b.className = 'loc-badge ' + cls;
+    $('loc-text').textContent = text;
+    if (current === 'loc') renderLocInfo();
+  }
+
+  function renderLocInfo() {
+    const f = Loc.last, ph = Loc.phone;
+    const rows = [
+      ['Status', Loc.status.msg],
+      ['Permission', Loc.perm],
+      ['Last fix', f ? `${ago(f.t)}, ±${Math.round(f.accuracy || 0)} m` : 'none yet'],
+      ['Fixes', String(Loc.fixes)],
+      ['Phone', ph ? `${ago(ph.t)}, ±${Math.round(ph.accuracy || 0)} m` : 'not sent'],
+    ];
+    if (Loc.status.code != null) rows.push(['Error code', String(Loc.status.code) + (Loc.status.code === 1 ? ' (blocked)' : Loc.status.code === 2 ? ' (unavailable)' : Loc.status.code === 3 ? ' (timed out)' : '')]);
+    $('loc-info').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  }
+
+  setInterval(renderLocBadge, 5000);
+
   // ------------------------------------------------------------------ search
   // The heavy lifting (postcode fixing, categories, multi-service matching)
   // lives in search.js so the phone page can share it.
@@ -567,11 +668,19 @@
     $('research-input').value = '';
     $('results-heard').innerHTML = `Nearest <b>${esc(cat.label.toLowerCase())}</b>`;
     $('results-heard').hidden = false;
-    $('results-status').textContent = 'Looking nearby…';
+    $('results-status').textContent = 'Finding your location…';
     $('results-list').replaceChildren();
     show('results');
+    let near;
+    try { near = await Loc.getOnce(12000); }
+    catch (e) {
+      if (seq !== searchSeq) return;
+      $('results-status').textContent = e.message + ' Nearby needs your location — press Location at the top of the home screen for help.';
+      return;
+    }
+    if (seq !== searchSeq) return;
+    $('results-status').textContent = 'Looking nearby…';
     try {
-      const near = await Loc.getOnce(10000);
       const list = await WPSearch.category(key, near);
       if (seq !== searchSeq) return;
       showResults(list, near, list.length ? '' : 'Nothing found within 2.5 km.');
@@ -655,6 +764,11 @@
       if (m.time && Date.now() / 1000 - m.time > 15 * 60) return;
       let p; try { p = JSON.parse(m.message); } catch { p = { q: m.message }; }
       if (!p) return;
+      if (p.from && finite(p.from.lat) && finite(p.from.lon)) {
+        Loc.phone = { lat: p.from.lat, lon: p.from.lon, accuracy: p.from.acc || 50, heading: null, speed: null, t: Date.now(), src: 'phone' };
+        renderLocBadge();
+        if (nav && nav.active && !Loc.fresh(30000)) onPosition(Loc.phone);
+      }
       if (p.ping) { toast('Phone paired ✓', 3000); Voice.say('Phone paired.'); return; }
       const place = (finite(p.lat) && finite(p.lon)) ? { name: p.name || 'Pinned location', sub: p.sub || '', lat: p.lat, lon: p.lon } : null;
       const label = place ? place.name : p.q;
@@ -697,22 +811,32 @@
     show('preview', mode);
 
     const token = preview;
+    let from = null;
+    try { from = await Loc.getOnce(12000); }
+    catch (e) {
+      if (preview !== token) return;
+      $('pv-status').textContent = e.message + ' Press Go and the route will start as soon as you’re found.';
+      $('btn-go').disabled = false;
+      if (current === 'preview') $('btn-go').focus();
+      return;
+    }
     try {
-      const from = await Loc.getOnce(15000);
       const route = await getRoute(from, place);
       if (preview !== token) return;
       preview.route = route; preview.from = from;
       $('pv-time').textContent = fmtDur(route.duration);
       $('pv-dist').textContent = fmtDist(route.total);
       $('pv-eta').textContent = fmtClock(new Date(Date.now() + route.duration * 1000));
-      $('pv-status').textContent = USE_MAPBOX ? 'Route by Mapbox' : 'Route by OpenStreetMap / Valhalla';
-      $('btn-go').disabled = false;
-      if (current === 'preview') $('btn-go').focus();
+      $('pv-status').textContent = (from.src === 'phone' ? 'Starting from your phone’s location · ' : '') +
+        (USE_MAPBOX ? 'Route by Mapbox' : 'Route by OpenStreetMap / Valhalla');
     } catch (e) {
       if (preview !== token) return;
       console.error(e);
-      $('pv-status').textContent = e.message || 'Couldn’t find a route.';
+      preview.from = from;
+      $('pv-status').textContent = (e.message || 'Couldn’t find a route.') + ' Press Go to try again.';
     }
+    $('btn-go').disabled = false;
+    if (current === 'preview') $('btn-go').focus();
   }
 
   function toggleSave() {
@@ -734,7 +858,7 @@
   let nav = null;
 
   async function startNav() {
-    if (!preview || !preview.route) return;
+    if (!preview) return;
     $('btn-go').disabled = true;
     await Heading.request();          // must follow the Go press (user gesture)
 
@@ -756,17 +880,43 @@
     show('nav');
     keepAwake(true);
 
-    const first = nav.route.steps[0];
-    if (first) { Voice.say(first.verbal, true); toast(first.text, 5000); }
+    if (nav.route) {
+      const first = nav.route.steps[0];
+      if (first) { Voice.say(first.verbal, true); toast(first.text, 5000); }
+    } else Voice.say('Finding your location.', true);
 
-    if (nav.pos) onPosition(nav.pos);
     Loc.watch(onPosition);
+    const startPos = nav.pos || Loc.fresh(10 * 60000) || Loc.phoneFresh();
+    if (startPos) onPosition(startPos); else renderNav();
     staleCheck();
+  }
+
+  // Navigation started before we had a route (no location yet): plan it now.
+  function ensureRoute(p) {
+    if (nav.routing || Date.now() - (nav.routeFailAt || 0) < 8000) return;
+    nav.routing = true;
+    renderNav();
+    getRoute(p, nav.dest).then((r) => {
+      if (!nav || !nav.active) return;
+      Object.assign(nav, { route: r, routing: false, along: 0, seg: 0, stepIdx: 1, announced: {}, lastReroute: Date.now() });
+      const first = r.steps[0];
+      if (first) { Voice.say(first.verbal, true); toast(first.text, 5000); }
+      onPosition(nav.pos);
+      staleCheck();
+    }).catch((e) => {
+      if (!nav) return;
+      nav.routing = false; nav.routeFailAt = Date.now();
+      toast('Route failed: ' + e.message + ' — retrying', 4000);
+      renderNav();
+    });
   }
 
   function onPosition(p) {
     if (!nav || !nav.active) return;
+    // A real glasses fix always beats the phone's position.
+    if (p.src === 'phone' && nav.pos && nav.pos.src !== 'phone' && Date.now() - nav.pos.t < 60000) return;
     nav.pos = p;
+    if (!nav.route) { ensureRoute(p); renderNav(); return; }
     const r = nav.route;
     const here = [p.lat, p.lon];
     const snap = snapToRoute(r, here, nav.seg, nav.along);
@@ -822,6 +972,7 @@
 
   async function reroute(p) {
     if (!nav || nav.rerouting) return;
+    if (!nav.route) { if (nav.pos) ensureRoute(nav.pos); return; }
     nav.rerouting = true;
     nav.lastReroute = Date.now();
     toast('Re-planning route…', 2500);
@@ -878,6 +1029,7 @@
   // Peek at other steps with Left / Right
   function peek(delta) {
     const r = nav.route;
+    if (!r) return;
     const base = nav.peek == null ? nav.stepIdx : nav.peek;
     const next = clamp(base + delta, 1, r.steps.length - 1);
     nav.peek = next === nav.stepIdx ? null : next;
@@ -887,6 +1039,7 @@
   }
 
   function zoom(delta) {
+    if (!nav.route) return;
     nav.zoom = clamp(nav.zoom + delta, 0, ZOOMS.length - 1);
     toast('Map: ' + fmtDist(ZOOMS[nav.zoom] * 200) + ' ahead', 1200);
     requestDraw();
@@ -903,6 +1056,19 @@
   function renderNav() {
     if (!nav) return;
     const r = nav.route;
+    if (!r) {
+      $('instr-icon').innerHTML = maneuverSVG('depart');
+      $('instr-dist').textContent = '–';
+      $('instr-street').textContent = nav.routing ? 'Planning your route…' : 'Waiting for your location…';
+      $('instr').classList.remove('soon', 'peek');
+      $('peek-tag').hidden = true;
+      $('nav-remaining').textContent = nav.dest.name;
+      $('nav-eta').textContent = '';
+      $('gps-warn').hidden = false;
+      $('gps-warn').textContent = 'Waiting for GPS';
+      requestDraw();
+      return;
+    }
     const i = nav.peek != null ? nav.peek : nav.stepIdx;
     const step = r.steps[i];
     if (step) {
@@ -946,6 +1112,7 @@
     ctx.clearRect(0, 0, w, h);
 
     const r = nav.route;
+    if (!r) return;
     const css = getComputedStyle(document.documentElement);
     const ACCENT = css.getPropertyValue('--accent').trim() || '#4fe3c1';
 
@@ -1051,6 +1218,8 @@
       else if (a === 'end') endRoute();
       else if (a === 'done') { nav = null; goHome(); }
       else if (a === 'phone') openPhone();
+      else if (a === 'loc') { renderLocInfo(); show('loc'); }
+      else if (a === 'locretry') { Loc.ensure(true); toast('Looking for your location…'); renderLocInfo(); }
       else if (a === 'newcode') { Relay.start(true); $('phone-code').textContent = Relay.pretty(); toast('New code — enter it on your phone'); }
       return;
     }
@@ -1080,6 +1249,8 @@
   renderChips();
   show('home', 'none');
   Relay.start();
+  Loc.ensure();
+  renderLocBadge();
   if (DEMO) toast('Demo mode: walking is simulated', 3000);
   console.info('Waypoint', USE_MAPBOX ? 'using Mapbox' : 'using OpenStreetMap (Photon + Valhalla)', DEMO ? '[demo]' : '');
 })();

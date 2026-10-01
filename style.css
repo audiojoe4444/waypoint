@@ -92,6 +92,28 @@ button { font: inherit; color: inherit; }
 .grow { flex: 1 1 auto; }
 .topbar .search input { font-size: 1.05rem; padding: 0.5rem 0.9rem; }
 
+/* ---------- location badge + help ---------- */
+.loc-badge {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  border: 0; border-radius: 999px; background: transparent;
+  padding: 0.35rem 0.6rem; font-size: 0.8rem; font-weight: 600; color: var(--dim);
+  cursor: pointer;
+}
+.loc-badge + .icon-btn { margin-left: 0.3rem; }
+.loc-badge .dot, .kv .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--warn); flex: none; }
+.loc-badge.ok .dot { background: var(--accent); }
+.loc-badge.bad .dot { background: var(--danger); }
+.loc-badge.ok { color: var(--text); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 0.8rem; margin: 0.2rem 0.2rem 0.6rem; font-size: 0.9rem; }
+.kv dt { color: var(--dim); }
+.kv dd { margin: 0; font-weight: 600; }
+.help { background: var(--surface); border-radius: var(--radius); padding: 0.6rem 0.9rem; font-size: 0.8rem; }
+.scroll:focus-visible { outline: 2px solid var(--line); border-radius: var(--radius); }
+.help p { margin: 0.2rem 0; }
+.help ol { margin: 0.3rem 0; padding-left: 1.2rem; }
+.help li { margin: 0.15rem 0; }
+
 /* ---------- phone pairing ---------- */
 .phone-body { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 0.2rem; }
 .phone-body .hint { margin: 0.2rem; }
@@ -250,7 +272,7 @@ button { font: inherit; color: inherit; }
 .map-wrap { flex: 1 1 auto; min-height: 0; }
 #map { width: 100%; height: 100%; display: block; }
 .gps-warn {
-  position: absolute; top: 0.3rem; right: 0.3rem;
+  position: absolute; top: 0.3rem; left: 0.3rem;
   font-size: 0.75rem; color: var(--warn);
   border: 1px solid var(--warn); border-radius: 999px; padding: 0.1rem 0.5rem;
 }

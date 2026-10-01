@@ -198,7 +198,9 @@
   async function send(payload, silent = false) {
     if (!code) { toast('Pair with your glasses first'); $('code-input').focus(); return false; }
     try {
-      const res = await fetch(`${RELAY}/waypoint-${code.toLowerCase()}`, { method: 'POST', body: JSON.stringify(Object.assign({ v: 1 }, payload)) });
+      const body = Object.assign({ v: 1 }, payload);
+      if (near) body.from = { lat: +near.lat.toFixed(6), lon: +near.lon.toFixed(6), acc: Math.round(near.acc || 50) };
+      const res = await fetch(`${RELAY}/waypoint-${code.toLowerCase()}`, { method: 'POST', body: JSON.stringify(body) });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       if (!silent) {
         toast('Sent to glasses ✓');
@@ -242,7 +244,7 @@
   function askLocation() {
     if (locAsked || !('geolocation' in navigator)) return;
     locAsked = true;
-    navigator.geolocation.getCurrentPosition((pos) => { near = { lat: pos.coords.latitude, lon: pos.coords.longitude }; renderRecent(); },
+    navigator.geolocation.getCurrentPosition((pos) => { near = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy }; renderRecent(); },
       () => {}, { timeout: 10000, maximumAge: 300000 });
   }
 
@@ -305,6 +307,7 @@
     history.replaceState(null, '', location.pathname);
   } else if (incoming) { $('q').value = incoming; askLocation(); run(incoming, true); history.replaceState(null, '', location.pathname); }
   else if (code) setTimeout(() => $('q').focus(), 300);
+  if (code) askLocation();   // so the glasses can borrow the phone's position if they need it
 })();
 </script>
 </body>

@@ -87,7 +87,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: 'data=' + encodeURIComponent(ql),
-        }, 14000);
+        }, 9000);
         return (data.elements || []).map((el) => {
           const t = el.tags || {};
           const lat = finite(el.lat) ? el.lat : el.center && el.center.lat;
@@ -115,18 +115,34 @@
     return (data.features || []).map(mapboxFeature);
   }
 
+  function firstUseful(promises, timeout) {
+    return new Promise((resolve, reject) => {
+      let pending = promises.length, lastErr = null, best = null;
+      const t = setTimeout(() => (best ? resolve(best) : reject(new Error('Nearby search timed out. Try again in a moment.'))), timeout);
+      promises.forEach((p) => p.then((l) => {
+        if (l && l.length) { clearTimeout(t); resolve(l); return; }
+        best = best || l;
+        if (--pending === 0) { clearTimeout(t); resolve(best || []); }
+      }, (e) => {
+        lastErr = e;
+        if (--pending === 0) { clearTimeout(t); best ? resolve(best) : reject(lastErr); }
+      }));
+    });
+  }
+
   async function category(key, near) {
     const cat = typeof key === 'string' ? CATEGORIES.find((c) => c.key === key) : key;
     if (!cat) return [];
     if (!near) throw new Error('Nearby search needs your location.');
-    let list = [];
-    try {
-      list = await overpass(cat, near, 900);
-      if (list.length < 3) list = await overpass(cat, near, 2500);
-    } catch (e) {
-      if (!TOKEN) throw e;
-      list = await mapboxCategory(cat, near);
-    }
+    // OpenStreetMap (Overpass) and Mapbox race; the first useful answer wins.
+    const osm = (async () => {
+      let l = await overpass(cat, near, 900);
+      if (l.length < 3) l = await overpass(cat, near, 2500);
+      return l;
+    })();
+    const jobs = [osm];
+    if (TOKEN) jobs.push(mapboxCategory(cat, near));
+    let list = await firstUseful(jobs, 20000);
     list.forEach((p) => { p.dist = distM(near, p); });
     list.sort((a, b) => a.dist - b.dist);
     // Drop exact duplicates (a node and a building for the same place)

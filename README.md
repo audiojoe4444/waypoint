@@ -36,6 +36,21 @@ The page also explains an optional iPhone Shortcut so you can send straight from
 
 Messages go through [ntfy.sh](https://ntfy.sh), a free relay with no account needed. Your code is the private channel name, so press **New code** on the glasses any time to change it.
 
+## If it can't find your location
+
+The badge at the top of the home screen shows the location status: **±8 m** means it has a fix, **Locating…** means it's still looking, **Blocked** means permission is off, and **Phone loc** means it's borrowing your phone's position. Press the badge to see details: permission state, when the last fix arrived, and any error code.
+
+The glasses get their location from your iPhone through the Meta AI app, so check:
+
+1. Settings → Privacy & Security → **Location Services** is on
+2. Settings → Apps → **Meta AI** → Location → **Always**, with **Precise Location** on
+3. Settings → Apps → Meta AI → **Background App Refresh** is on
+4. Bluetooth is on and the Meta AI app is running in the background
+
+Even without a glasses fix, you can still navigate:
+- Sending a place from the phone page also sends your phone's position, which Waypoint uses as the starting point.
+- **Go** always works. If there's no location yet, navigation shows "Waiting for your location…" and plans the route the moment a fix arrives.
+
 ## Navigation services
 
 | | Search | Routing | Account? |

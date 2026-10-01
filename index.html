@@ -17,6 +17,9 @@
       <header class="brand">
         <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#logo"/></svg>
         <span class="brand-name">Waypoint</span>
+        <button class="loc-badge" id="loc-badge" data-action="loc" aria-label="Location status">
+          <span class="dot"></span><span id="loc-text">Location</span>
+        </button>
         <button class="icon-btn" data-action="phone" aria-label="Send a place from your phone">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10.5 18.5h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span>Phone</span>
@@ -70,6 +73,30 @@
       </div>
       <div class="actions">
         <button class="btn" data-action="newcode">New code</button>
+      </div>
+    </section>
+
+    <!-- ============ LOCATION HELP ============ -->
+    <section id="screen-loc" class="screen" data-screen="loc" hidden>
+      <div class="topbar">
+        <button class="back" data-action="back" aria-label="Back">‹</button>
+        <h1 class="title">Location</h1>
+      </div>
+      <div class="scroll" tabindex="0" aria-label="Location details and help">
+        <dl id="loc-info" class="kv"></dl>
+        <div class="help">
+          <p><b>Never finds you?</b> On your iPhone check:</p>
+          <ol>
+            <li>Settings → Privacy &amp; Security → <b>Location Services</b> on</li>
+            <li>Settings → Apps → <b>Meta AI</b> → Location → <b>Always</b>, and <b>Precise Location</b> on</li>
+            <li>Settings → Apps → Meta AI → <b>Background App Refresh</b> on</li>
+            <li>Bluetooth on, and the Meta AI app open in the background</li>
+          </ol>
+          <p>Then press Try again. Sending a place from the phone page also passes over your phone's location, so you can start a route either way.</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" data-action="locretry">Try again</button>
       </div>
     </section>
 
