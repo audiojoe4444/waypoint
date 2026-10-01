@@ -687,7 +687,25 @@
     else show('home', 'none');
   }
 
+  let lastKeyAt = 0;
+  document.addEventListener('keydown', () => { lastKeyAt = Date.now(); }, true);
+
+  // Home always opens with an empty "Where to?" box, focused and ready.
+  // The glasses can move focus around just after a page change, so we place
+  // it a few times — but stop as soon as you've pressed anything yourself.
+  function focusHome() {
+    const input = $('search-input');
+    input.value = '';
+    const since = Date.now();
+    const put = () => {
+      if (current !== 'home' || lastKeyAt > since) return;
+      if (document.activeElement !== input) input.focus({ preventScroll: true });
+    };
+    [0, 80, 250, 600, 1200].forEach((ms) => setTimeout(put, ms));
+  }
+
   function focusScreen(name) {
+    if (name === 'home') { focusHome(); return; }
     requestAnimationFrame(() => {
       let el = null;
       if (name === 'home') el = $('search-input');
