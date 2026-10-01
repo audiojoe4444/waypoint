@@ -65,19 +65,17 @@ button { font: inherit; color: inherit; }
 .brand {
   display: inline-flex; align-items: center; gap: 0.5rem;
   color: var(--accent); background: transparent;
-  border: 2px solid var(--line); border-radius: 999px;
-  padding: 0.2rem 0.95rem 0.2rem 0.35rem;
+  border: 0; border-radius: 999px;
+  padding: 0.25rem 0.9rem 0.25rem 0.3rem;
   cursor: pointer;
-  transition: border-color 0.4s ease;
 }
-.brand.ok { border-color: var(--ok); }
-.brand.bad { border-color: var(--danger); }
-.brand.wait { animation: pulse-border 1.6s ease-in-out infinite; }
-@keyframes pulse-border { 50% { border-color: transparent; } }
-@media (prefers-reduced-motion: reduce) { .brand.wait { animation: none; } }
-.brand:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+/* Location status is shown by the colour of the word "Waypoint":
+   white = all good (or still finding you), red = a problem — select it for details. */
+.brand .brand-name { transition: color 0.4s ease; }
+.brand.bad .brand-name { color: var(--danger); }
+.brand:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .brand-mark { width: 2.1rem; height: 2.1rem; }
-.brand-name { font-weight: 700; font-size: 1.2rem; letter-spacing: 0.02em; color: var(--text); }
+.brand-name { font-weight: 700; font-size: 1.2rem; letter-spacing: 0.02em; color: #ffffff; }
 
 /* ---------- header buttons, chips ---------- */
 .icon-btn {
