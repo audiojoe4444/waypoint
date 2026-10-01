@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Waypoint">
+  <meta name="theme-color" content="#000000">
+  <title>Waypoint</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+
+    <!-- ============ HOME ============ -->
+    <section id="screen-home" class="screen" data-screen="home">
+      <header class="brand">
+        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#logo"/></svg>
+        <span class="brand-name">Waypoint</span>
+      </header>
+
+      <form id="search-form" class="search" autocomplete="off">
+        <label for="search-input" class="sr-only">Where to?</label>
+        <input id="search-input" type="search" enterkeyhint="search"
+               placeholder="Where to?" aria-label="Where to?">
+      </form>
+
+      <div class="scroll" id="home-lists">
+        <h2 class="section-label" id="fav-label" hidden>Saved</h2>
+        <div id="fav-list" class="list"></div>
+        <h2 class="section-label" id="recent-label" hidden>Recent</h2>
+        <div id="recent-list" class="list"></div>
+        <p id="home-empty" class="hint">Select the box above and say or write a place, address or postcode.</p>
+      </div>
+    </section>
+
+    <!-- ============ RESULTS ============ -->
+    <section id="screen-results" class="screen" data-screen="results" hidden>
+      <div class="topbar">
+        <button class="back" data-action="back" aria-label="Back">‹</button>
+        <h1 class="title" id="results-title">Results</h1>
+      </div>
+      <div class="scroll">
+        <p id="results-status" class="hint"></p>
+        <div id="results-list" class="list"></div>
+      </div>
+    </section>
+
+    <!-- ============ PREVIEW ============ -->
+    <section id="screen-preview" class="screen" data-screen="preview" hidden>
+      <div class="topbar">
+        <button class="back" data-action="back" aria-label="Back">‹</button>
+        <h1 class="title">Route</h1>
+      </div>
+      <div class="preview-body">
+        <h2 id="pv-name" class="pv-name"></h2>
+        <p id="pv-addr" class="pv-addr"></p>
+        <div class="pv-stats">
+          <div><span id="pv-time" class="big">–</span><span class="small">walk</span></div>
+          <div><span id="pv-dist" class="big">–</span><span class="small">distance</span></div>
+          <div><span id="pv-eta" class="big">–</span><span class="small">arrive</span></div>
+        </div>
+        <p id="pv-status" class="hint"></p>
+      </div>
+      <div class="actions">
+        <button id="btn-go" class="btn primary" data-action="go" disabled>Go</button>
+        <button id="btn-save" class="btn" data-action="save">☆ Save</button>
+      </div>
+    </section>
+
+    <!-- ============ NAVIGATE ============ -->
+    <section id="screen-nav" class="screen nav" data-screen="nav" hidden>
+      <button id="nav-focus" class="nav-focus" aria-label="Navigation. Select for options."></button>
+      <div class="instr" id="instr">
+        <svg id="instr-icon" class="instr-icon" viewBox="0 0 100 100" aria-hidden="true"></svg>
+        <div class="instr-text">
+          <div id="instr-dist" class="instr-dist">–</div>
+          <div id="instr-street" class="instr-street">Finding you…</div>
+        </div>
+      </div>
+      <div id="peek-tag" class="peek-tag" hidden></div>
+      <div class="map-wrap">
+        <canvas id="map" aria-hidden="true"></canvas>
+        <div id="gps-warn" class="gps-warn" hidden>Weak GPS</div>
+      </div>
+      <div class="navbar">
+        <span id="nav-remaining">–</span>
+        <span id="nav-eta">–</span>
+      </div>
+
+      <div id="nav-menu" class="menu" hidden>
+        <div class="menu-card">
+          <button class="btn" data-action="resume">Resume</button>
+          <button class="btn" data-action="voice" id="btn-voice">Voice: On</button>
+          <button class="btn" data-action="reroute">Re-plan route</button>
+          <button class="btn danger" data-action="end">End route</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ARRIVED ============ -->
+    <section id="screen-arrive" class="screen arrive" data-screen="arrive" hidden>
+      <svg class="arrive-mark" viewBox="0 0 100 100" aria-hidden="true">
+        <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="6"/>
+        <path d="M32 51 l12 12 l24 -26" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h1 class="arrive-title">You've arrived</h1>
+      <p id="arrive-name" class="pv-addr"></p>
+      <div class="actions">
+        <button class="btn primary" data-action="done">Done</button>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+
+  <!-- Logo symbol: a location pin whose inner mark is a forward chevron -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="logo" viewBox="0 0 64 64">
+      <path d="M32 4C20.4 4 11 13.2 11 24.6 11 40 32 60 32 60s21-20 21-35.4C53 13.2 43.6 4 32 4z"
+            fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/>
+      <path d="M24 32 L32 16 L40 32 L32 27 Z" fill="currentColor"/>
+    </symbol>
+  </svg>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
