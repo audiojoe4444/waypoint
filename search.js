@@ -355,7 +355,15 @@
       if (p.src === 'nominatim') score += 0.5;
       if (near) { p.dist = distM(near, p); score += Math.min(8, Math.log2(1 + p.dist / 1000) * 1.1); }
       const nn = norm(p.name);
-      if (nn === nq) score -= 1.5; else if (nn.startsWith(nq) || nq.startsWith(nn)) score -= 0.7;
+      if (nn === nq) score -= 3; else if (nn.startsWith(nq) || nq.startsWith(nn)) score -= 1.5;
+      // How many of the words you said appear in the name (or, less so, the address)?
+      const qw = nq.split(' ').filter((w) => w.length > 1);
+      if (qw.length) {
+        const nsub = norm(p.sub);
+        const inName = qw.filter((w) => nn.includes(w)).length / qw.length;
+        const inSub = qw.filter((w) => nsub.includes(w)).length / qw.length;
+        score += 3 * (1 - inName) + 1 * (1 - Math.max(inName, inSub));
+      }
       all.push(Object.assign({}, p, { score }));
     }));
     all.sort((a, b) => a.score - b.score);

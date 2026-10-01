@@ -38,6 +38,8 @@ Messages go through [ntfy.sh](https://ntfy.sh), a free relay with no account nee
 
 ## If it can't find your location
 
+Waypoint now keeps retrying by itself. If a location request is refused or goes quiet, it starts a fresh one within a second or two, then backs off gently, so you shouldn't ever need to press Try again. It only shows **Blocked** if location keeps being refused for more than 20 seconds.
+
 The badge at the top of the home screen shows the location status: **±8 m** means it has a fix, **Locating…** means it's still looking, **Blocked** means permission is off, and **Phone loc** means it's borrowing your phone's position. Press the badge to see details: permission state, when the last fix arrived, and any error code.
 
 The glasses get their location from your iPhone through the Meta AI app, so check:

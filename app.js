@@ -59,6 +59,7 @@
   let toastTimer = null;
   function toast(msg, ms = 3000) {
     const el = $('toast');
+    el.classList.toggle('on-nav', current === 'nav');
     el.textContent = msg;
     el.hidden = false;
     clearTimeout(toastTimer);
@@ -133,9 +134,11 @@
   }
 
   // ------------------------------------------------------------------ location
-  // One shared watch runs while the app is open (so a fix is usually ready),
-  // backed up by one-shot requests and, failing that, the phone's location
-  // sent over from the companion page.
+  // The glasses' location comes from the phone and can be flaky to start:
+  // a request may be refused or go silent even when permission is fine, and a
+  // fresh request then works. So Waypoint looks after itself: it asks once,
+  // then keeps one watch running and quietly restarts it (with back-off)
+  // whenever it errors or goes quiet. The user never has to press Try again.
   const Loc = {
     last: null,        // best glasses fix {lat, lon, accuracy, heading, speed, t, src}
     phone: null,       // last location reported by the phone page
@@ -146,6 +149,13 @@
     status: { state: 'idle', msg: 'Not started', code: null, at: 0 },
     perm: 'unknown',
     fixes: 0,
+    started: false,
+    startedAt: 0,
+    fails: 0,          // restarts since the last good fix
+    denies: 0,         // permission refusals since the last good fix
+    firstDenyAt: 0,
+    restarts: 0,
+    timer: null,
 
     norm(pos, src = 'glasses') {
       const c = pos.coords;
@@ -157,39 +167,93 @@
       renderLocBadge();
     },
 
+    // Only call it "blocked" once refusals have persisted for a while.
+    reallyBlocked() { return Loc.denies >= 4 && Date.now() - Loc.firstDenyAt > 20000; },
+
     onFix(pos) {
+      const c = pos && pos.coords;
+      if (!c || !finite(c.latitude) || !finite(c.longitude)) return;
       Loc.last = Loc.norm(pos);
       Loc.lastFixAt = Date.now();
       Loc.fixes++;
+      Loc.fails = 0; Loc.denies = 0; Loc.firstDenyAt = 0;
       Loc.setStatus('ok', 'Location found');
       Loc.waiters.splice(0).forEach((w) => w.resolve(Loc.last));
       Loc.listeners.forEach((cb) => cb(Loc.last));
+      Loc.schedule();
     },
 
     onError(err) {
       const code = err && err.code;
-      const st = code === 1 ? 'denied' : code === 3 ? 'timeout' : 'unavailable';
-      // Don't let a passing hiccup hide a working fix.
-      if (Loc.last && Date.now() - Loc.lastFixAt < 30000 && code !== 1) return;
-      Loc.setStatus(st, locError(err) + (err && err.message ? ' (' + err.message + ')' : ''), code);
-      if (code === 1) Loc.waiters.splice(0).forEach((w) => w.reject(new Error(locError(err))));
+      if (code === 1) { Loc.denies++; if (!Loc.firstDenyAt) Loc.firstDenyAt = Date.now(); }
+      Loc.lastErr = { code, msg: (err && err.message) || '', at: Date.now() };
+      if (!Loc.fresh(30000)) {
+        if (code === 1 && Loc.reallyBlocked()) Loc.setStatus('denied', locError(err), code);
+        else Loc.setStatus('searching', 'Looking for your location…', code);
+      }
+      // A refused or failed watch is dead — try again soon.
+      Loc.dead = true;
+      Loc.schedule(code === 1 ? (Loc.denies <= 2 ? 700 : 2000) : 2500);
     },
 
-    // Start (or restart) listening. Safe to call repeatedly.
-    ensure(restart = false) {
-      if (DEMO) return;
+    clearWatch() {
+      if (Loc.watchId != null) { try { navigator.geolocation.clearWatch(Loc.watchId); } catch { /* ignore */ } }
+      Loc.watchId = null;
+    },
+
+    startWatch() {
+      Loc.clearWatch();
+      Loc.restarts++;
+      Loc.dead = false;
+      Loc.startedAt = Date.now();
+      try { Loc.watchId = navigator.geolocation.watchPosition(Loc.onFix, Loc.onError, { enableHighAccuracy: true }); }
+      catch (e) { Loc.onError({ code: 2, message: e.message }); return; }
+      // Every other retry, also try a one-shot request (some runtimes answer one but not the other).
+      if (Loc.fails % 2 === 1) { try { navigator.geolocation.getCurrentPosition(Loc.onFix, () => {}, { timeout: 10000 }); } catch { /* ignore */ } }
+      Loc.schedule();
+    },
+
+    // Health check: when nothing has arrived for a while, restart the watch.
+    schedule(delay) {
+      clearTimeout(Loc.timer);
+      if (delay == null) delay = Loc.fresh(30000) ? 15000 : Math.min(15000, 3000 * Math.pow(1.6, Loc.fails));
+      Loc.timer = setTimeout(Loc.check, delay);
+    },
+
+    check() {
+      if (document.visibilityState === 'hidden') { Loc.schedule(5000); return; }
+      const quietFor = Date.now() - Math.max(Loc.lastFixAt, Loc.startedAt);
+      const needRestart = !Loc.fresh(30000) && (Loc.dead || quietFor > 2500 || Loc.watchId == null);
+      if (needRestart) { Loc.fails++; Loc.startWatch(); }
+      else Loc.schedule();
+    },
+
+    // Begin. The very first request is a single one-shot so only one
+    // permission prompt can appear; the watch starts once it's answered.
+    start() {
+      if (DEMO || Loc.started) return;
+      Loc.started = true;
+      Loc.firstStartAt = Date.now();
       if (!('geolocation' in navigator)) { Loc.setStatus('unsupported', 'This browser has no location support.'); return; }
-      if (restart && Loc.watchId != null) { navigator.geolocation.clearWatch(Loc.watchId); Loc.watchId = null; }
-      if (Loc.watchId == null) {
-        if (Loc.status.state !== 'ok') Loc.setStatus('searching', 'Looking for your location…');
-        try {
-          Loc.watchId = navigator.geolocation.watchPosition(Loc.onFix, Loc.onError, { enableHighAccuracy: true });
-        } catch (e) { Loc.setStatus('unavailable', 'Location error: ' + e.message); }
-      }
-      // A one-shot request as well — some runtimes answer one but not the other.
-      try { navigator.geolocation.getCurrentPosition(Loc.onFix, Loc.onError, { timeout: 15000 }); } catch { /* ignore */ }
+      Loc.setStatus('searching', 'Looking for your location…');
+      let begun = false;
+      const begin = () => { if (!begun) { begun = true; Loc.startWatch(); } };
+      try {
+        navigator.geolocation.getCurrentPosition((p) => { Loc.onFix(p); begin(); },
+          (e) => { Loc.onError(e); begin(); }, { timeout: 15000 });
+      } catch { begin(); }
+      setTimeout(begin, 4000);    // no answer yet? start the watch anyway (retries cover any clash)
       Loc.checkPermission();
     },
+
+    // "I need a location now": restart straight away unless a request is fresh.
+    kick() {
+      if (DEMO) return;
+      if (!Loc.started) { Loc.start(); return; }
+      if (!Loc.fresh(30000) && Date.now() - Loc.startedAt > 2000) { Loc.fails++; Loc.startWatch(); }
+    },
+
+    ensure(restart = false) { if (restart) { Loc.fails = 0; Loc.denies = 0; Loc.firstDenyAt = 0; Loc.started ? Loc.startWatch() : Loc.start(); } else Loc.kick(); },
 
     async checkPermission() {
       try {
@@ -209,17 +273,16 @@
       if (DEMO) return Promise.resolve(Sim.current());
       const f = Loc.fresh();
       if (f) return Promise.resolve(f);
-      Loc.ensure();
-      // Already have the phone's position? Only give the glasses a few seconds.
+      Loc.kick();
       if (allowPhone && Loc.phoneFresh()) timeout = Math.min(timeout, 3000);
       return new Promise((resolve, reject) => {
         const w = { resolve: (v) => { clearTimeout(w.t); resolve(v); }, reject: (e) => { clearTimeout(w.t); reject(e); } };
         w.t = setTimeout(() => {
           Loc.waiters = Loc.waiters.filter((x) => x !== w);
           const ph = allowPhone && Loc.phoneFresh();
-          if (Loc.last && Date.now() - Loc.last.t < 10 * 60000) resolve(Loc.last);   // older fix beats nothing
+          if (Loc.last && Date.now() - Loc.last.t < 10 * 60000) resolve(Loc.last);   // an older fix beats nothing
           else if (ph) resolve(ph);
-          else reject(new Error(Loc.status.state === 'denied' ? locError({ code: 1 }) : 'Can’t find your location yet.'));
+          else reject(new Error(Loc.status.state === 'denied' ? locError({ code: 1 }) : 'Still finding your location.'));
         }, timeout);
         Loc.waiters.push(w);
       });
@@ -228,7 +291,7 @@
     watch(cb) {
       if (DEMO) { Sim.start(cb); return; }
       Loc.listeners.add(cb);
-      Loc.ensure();
+      Loc.kick();
     },
 
     stop() {
@@ -236,6 +299,10 @@
       Loc.listeners.clear();   // the background watch keeps running so a fix stays warm
     },
   };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !DEMO && Loc.started && !Loc.fresh(30000)) { Loc.fails = 0; Loc.startWatch(); }
+  });
 
   function locError(err) {
     if (!err) return 'Location unavailable.';
@@ -582,7 +649,7 @@
     else if (f) { text = '±' + Math.round(f.accuracy || 0) + ' m'; cls = 'ok'; }
     else if (st === 'denied') { text = 'Blocked'; cls = 'bad'; }
     else if (Loc.phoneFresh()) { text = 'Phone loc'; cls = 'ok'; }
-    else if (st === 'searching' || st === 'idle') text = 'Locating…';
+    else if ((st === 'searching' || st === 'idle') && Date.now() - (Loc.firstStartAt || Date.now()) < 30000) text = 'Locating…';
     else { text = 'No GPS'; cls = 'bad'; }
     b.className = 'loc-badge ' + cls;
     $('loc-text').textContent = text;
@@ -596,9 +663,11 @@
       ['Permission', Loc.perm],
       ['Last fix', f ? `${ago(f.t)}, ±${Math.round(f.accuracy || 0)} m` : 'none yet'],
       ['Fixes', String(Loc.fixes)],
+      ['Auto-retries', String(Math.max(0, Loc.restarts - 1))],
       ['Phone', ph ? `${ago(ph.t)}, ±${Math.round(ph.accuracy || 0)} m` : 'not sent'],
     ];
-    if (Loc.status.code != null) rows.push(['Error code', String(Loc.status.code) + (Loc.status.code === 1 ? ' (blocked)' : Loc.status.code === 2 ? ' (unavailable)' : Loc.status.code === 3 ? ' (timed out)' : '')]);
+    if (Loc.lastErr && !Loc.fresh(30000)) rows.push(['Last error', `${Loc.lastErr.code} ${Loc.lastErr.msg || ''} (${ago(Loc.lastErr.at)})`]);
+    if (false) rows.push(['Error code', String(Loc.status.code) + (Loc.status.code === 1 ? ' (blocked)' : Loc.status.code === 2 ? ' (unavailable)' : Loc.status.code === 3 ? ' (timed out)' : '')]);
     $('loc-info').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
   }
 
@@ -633,7 +702,9 @@
     show('results', current === 'results' ? 'replace' : mode);
 
     let near = null;
-    try { near = await Loc.getOnce(8000); } catch { /* search without location bias */ }
+    // Use whatever position we have; don't hold the search up waiting for GPS.
+    near = Loc.fresh(10 * 60000) || Loc.phoneFresh();
+    if (!near) { try { near = await Loc.getOnce(1500); } catch { /* search without location bias */ } }
 
     try {
       const res = await WPSearch.find(raw, near);
@@ -806,7 +877,7 @@
     $('pv-addr').textContent = place.sub || '';
     $('pv-time').textContent = '–'; $('pv-dist').textContent = '–'; $('pv-eta').textContent = '–';
     $('pv-status').textContent = 'Finding a walking route…';
-    $('btn-go').disabled = true;
+    $('btn-go').disabled = false;   // Go works straight away; the route is planned as soon as we can
     updateSaveBtn();
     show('preview', mode);
 
@@ -817,7 +888,6 @@
       if (preview !== token) return;
       $('pv-status').textContent = e.message + ' Press Go and the route will start as soon as you’re found.';
       $('btn-go').disabled = false;
-      if (current === 'preview') $('btn-go').focus();
       return;
     }
     try {
@@ -835,8 +905,6 @@
       preview.from = from;
       $('pv-status').textContent = (e.message || 'Couldn’t find a route.') + ' Press Go to try again.';
     }
-    $('btn-go').disabled = false;
-    if (current === 'preview') $('btn-go').focus();
   }
 
   function toggleSave() {
@@ -869,7 +937,7 @@
       pos: preview.from,
       along: 0, seg: 0, offDist: 0, offCount: 0,
       stepIdx: 1, announced: {},
-      lastReroute: Date.now(), rerouting: false,
+      lastReroute: 0, rerouting: false,
       peek: null, peekTimer: null,
       zoom: 1, mapMode: store.get('mapMode', 'auto'), lastCourse: null,
     };
@@ -929,7 +997,7 @@
         if (snap.along >= nav.along - 10) { nav.along = snap.along; nav.seg = snap.seg; }
       } else {
         nav.offCount++;
-        if (nav.offCount >= 3 && !nav.rerouting && Date.now() - nav.lastReroute > 12000) reroute(p);
+        if (nav.offCount >= 3 && !nav.rerouting && Date.now() - nav.lastReroute > 10000) reroute(p);
       }
     }
 
@@ -962,11 +1030,11 @@
     const verbal = step.kind === 'arrive' ? 'Your destination is ahead.' : step.verbal;
     if (!a.far && d <= FAR_ANNOUNCE && d > NEAR_ANNOUNCE + 15 && legLen > FAR_ANNOUNCE + 20) {
       a.far = true;
-      Voice.say('In ' + spokenDist(d) + ', ' + lcFirst(verbal) + '.');
+      Voice.say('In ' + spokenDist(d) + ', ' + lcFirst(trimDot(verbal)) + '.');
     }
     if (!a.near && d <= NEAR_ANNOUNCE + 5) {
       a.near = true; a.far = true;
-      Voice.say(verbal + '.', true);
+      Voice.say(trimDot(verbal) + '.', true);
     }
   }
 
@@ -1124,8 +1192,10 @@
     const hdg = Heading.current();
     const th = rad(hdg == null ? 0 : hdg);
     const cos = Math.cos(th), sin = Math.sin(th);
-    const scale = ZOOMS[nav.zoom];
     const cx = w / 2, cy = h * 0.66;
+    let scale = ZOOMS[nav.zoom];
+    // Off the route? Zoom out enough to show the way back to it.
+    if (!onRoute && finite(nav.offDist)) scale = Math.max(scale, Math.min(20, (nav.offDist * 1.25) / (h * 0.55)));
     const S = (p) => {
       const [x, y] = project(p, center);
       return [cx + (x * cos - y * sin) / scale, cy - (x * sin + y * cos) / scale];
@@ -1249,7 +1319,7 @@
   renderChips();
   show('home', 'none');
   Relay.start();
-  Loc.ensure();
+  Loc.start();
   renderLocBadge();
   if (DEMO) toast('Demo mode: walking is simulated', 3000);
   console.info('Waypoint', USE_MAPBOX ? 'using Mapbox' : 'using OpenStreetMap (Photon + Valhalla)', DEMO ? '[demo]' : '');
