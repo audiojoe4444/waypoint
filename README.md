@@ -121,7 +121,8 @@ search.js                               search engine (postcodes, categories, na
 style.css                               styles for the additive display
 app.js                                  search, routing, tracking, voice, mini map
 config.js                               your settings (Mapbox token, units…)
-icons/icon.svg                          monochrome app icon
+icons/icon.svg                          monochrome glasses launcher icon (compass pin)
+icons/favicon.svg                       browser tab icon
 icons/apple-touch-icon.png              iPhone Home Screen icon
 .well-known/meta-wearables-manifest.json  name + icon for the glasses launcher
 .nojekyll                               lets GitHub Pages serve .well-known

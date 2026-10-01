@@ -61,7 +61,7 @@ button { font: inherit; color: inherit; }
 
 /* ---------- brand ---------- */
 .brand { display: flex; align-items: center; gap: 0.5rem; color: var(--accent); }
-.brand-mark { width: 1.9rem; height: 1.9rem; }
+.brand-mark { width: 2.3rem; height: 2.3rem; }
 .brand-name { font-weight: 700; font-size: 1.25rem; letter-spacing: 0.02em; color: var(--text); }
 
 /* ---------- header buttons, chips ---------- */
