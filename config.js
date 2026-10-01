@@ -7,7 +7,7 @@ window.WAYPOINT_CONFIG = {
   // switch search + routing to Mapbox. Leave as "" to use the free
   // OpenStreetMap services (Photon search + Valhalla routing), no account.
   // Tip: in your Mapbox account, restrict the token to your github.io URL.
-  MAPBOX_TOKEN: "",
+  MAPBOX_TOKEN: "pk.eyJ1IjoiYXVkaW9qb2U0NDQ0IiwiYSI6ImNtdXEzc2RqaTA4Y3czMHM3bTJsb2ljZDkifQ.YN0jrIM6brF1lhOmnvyqlg",
 
   // "metric" (metres / km) or "imperial" (yards / miles)
   UNITS: "metric",
