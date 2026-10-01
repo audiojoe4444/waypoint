@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "Waypoint",
+  "description": "Walking turn-by-turn navigation with a heads-up arrow and mini map.",
+  "appearance": {
+    "theme_color": "#0B6455",
+    "icon": {
+      "src": "../icons/icon.svg",
+      "type": "monochrome"
+    }
+  }
+}
