@@ -15,6 +15,29 @@ Built from the [Meta Wearables Web Apps docs](https://wearables.developer.meta.c
 
 If you go off the route by more than about 30 m, it plans a new one for you.
 
+## Sound and voice
+
+The glasses only have one built-in voice, and it isn't great. Waypoint gives you a choice. Change it any time from the route menu with **Sound: …**.
+
+| Mode | What you hear | Needs |
+|---|---|---|
+| **Chimes** (default) | A soft ping about 60 m before a turn, then a two-note chime at the turn. Left turns play in your **left ear** (falling notes), right turns in your **right ear** (rising notes). Arrival is a little rising arpeggio. | Nothing |
+| **Natural voice** | A natural Google voice (e.g. British "Charon" or "Kore") reads the directions, panned slightly toward the turn. The whole route's phrases are fetched when you press Go, so there's no delay at junctions. | A Google Text-to-Speech key |
+| **Glasses voice** | The built-in voice | Nothing |
+| **Off** | Silence | Nothing |
+
+### Setting up the natural voice (about 5 minutes, one time)
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com), sign in, and create a project (e.g. "Waypoint").
+2. Search for **Cloud Text-to-Speech API** and click **Enable**. Google will ask you to set up billing. A card is required, but the free allowance is **1 million characters a month** for these voices, and a typical walk uses about 500.
+3. Go to **APIs & Services → Credentials → Create credentials → API key**. Then click the key to edit it:
+   - **Application restrictions:** Websites → add `https://<you>.github.io/*`
+   - **API restrictions:** Restrict key → **Cloud Text-to-Speech API**
+4. Optional but sensible: under **Billing → Budgets & alerts**, set a £1 budget alert.
+5. On your phone, open the send page. Under **Voice for directions**, paste the key, pick a voice, and tap **▶ Preview**. With Waypoint open on the glasses, tap **Send to glasses**. The glasses will say hello in the new voice.
+
+The key goes straight from your phone to your glasses (it isn't stored on the relay or in GitHub). To go back to chimes, use **Switch the glasses back to chimes** on the phone page.
+
 ## Finding places
 
 - **Postcodes:** whatever the glasses hear ("sw one a two a a", "S.W.1A2AA", "sw1a zaa", "double you see two aitch…", even the NATO alphabet) is cleaned up, checked against [postcodes.io](https://postcodes.io), the free official UK postcode data, and shown with its street name.

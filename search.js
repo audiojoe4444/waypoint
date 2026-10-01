@@ -62,7 +62,7 @@
     { key: 'food',     label: 'Food',     words: ['food', 'restaurant', 'restaurants', 'something to eat', 'eat', 'lunch', 'dinner', 'breakfast', 'takeaway', 'fast food'], osm: ['amenity=restaurant', 'amenity=fast_food'], mapbox: 'restaurant' },
     { key: 'pub',      label: 'Pub',      words: ['pub', 'pubs', 'bar', 'bars', 'beer', 'a drink', 'drink'],                       osm: ['amenity=pub', 'amenity=bar'],       mapbox: 'pub' },
     { key: 'station',  label: 'Station',  words: ['station', 'stations', 'train station', 'railway station', 'tube', 'tube station', 'underground', 'train', 'trains', 'overground'], osm: ['railway=station', 'railway=halt'], mapbox: 'train_station' },
-    { key: 'shop',     label: 'Shop',     words: ['shop', 'shops', 'supermarket', 'supermarkets', 'grocery', 'groceries', 'corner shop', 'convenience store', 'off licence'], osm: ['shop=supermarket', 'shop=convenience'], mapbox: 'supermarket' },
+    { key: 'shop',     label: 'Shop',     words: ['shop', 'shops', 'shopping', 'supermarket', 'supermarkets', 'grocery', 'groceries', 'corner shop', 'convenience store', 'off licence'], osm: ['shop'], radius: [500, 1200], photon: 'shop', mapbox: 'supermarket' },
     { key: 'pharmacy', label: 'Pharmacy', words: ['pharmacy', 'pharmacies', 'chemist', 'chemists', 'drugstore'],                   osm: ['amenity=pharmacy'],                 mapbox: 'pharmacy' },
     { key: 'cash',     label: 'Cash',     words: ['cash', 'atm', 'atms', 'cashpoint', 'cash point', 'cash machine', 'bank', 'banks'], osm: ['amenity=atm', 'amenity=bank'],      mapbox: 'atm' },
     { key: 'toilets',  label: 'Toilets',  words: ['toilet', 'toilets', 'loo', 'loos', 'restroom', 'bathroom', 'wc', 'public toilet', 'public toilets', 'lavatory'], osm: ['amenity=toilets'], mapbox: 'toilets' },
@@ -75,80 +75,106 @@
     return CATEGORIES.find((c) => c.words.includes(n)) || null;
   }
 
-  const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+  const OVERPASS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+  ];
 
-  async function overpass(cat, near, radius) {
-    const parts = cat.osm.map((t) => { const [k, v] = t.split('='); return `nwr["${k}"="${v}"](around:${radius},${near.lat},${near.lon});`; }).join('');
-    const ql = `[out:json][timeout:12];(${parts});out center tags 80;`;
-    let lastErr;
-    for (const ep of OVERPASS) {
-      try {
-        const data = await getJSON(ep, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'data=' + encodeURIComponent(ql),
-        }, 9000);
-        return (data.elements || []).map((el) => {
-          const t = el.tags || {};
+  const titleCase = (s) => String(s || '').replace(/_/g, ' ').replace(/;.*/, '').replace(/^\w/, (c) => c.toUpperCase());
+
+  function osmPlace(cat, t, lat, lon) {
+    const street = [t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' ');
+    let kind = '';
+    if (cat.key === 'shop') kind = titleCase(t.shop === 'yes' ? 'shop' : t.shop);
+    if (cat.key === 'food') kind = titleCase(t.cuisine || (t.amenity === 'fast_food' ? 'fast food' : 'restaurant'));
+    if (cat.key === 'station') kind = t.station === 'subway' ? 'Underground' : (t.network || 'Rail');
+    if (cat.key === 'toilets') kind = t.fee === 'no' ? 'Free' : t.fee === 'yes' ? 'Paid' : '';
+    if (cat.key === 'cash') kind = t.amenity === 'bank' ? 'Bank' : 'Cash machine';
+    if (cat.key === 'pub' && t.amenity === 'bar') kind = 'Bar';
+    return { name: t.name || t.brand || t.operator || cat.label, sub: [kind, street].filter(Boolean).join(' · '), lat, lon, src: 'osm' };
+  }
+
+  // One Overpass query, sent to every mirror at once; first good answer wins.
+  function overpass(cat, near, radius) {
+    const parts = cat.osm.map((t) => {
+      const [k, v] = t.split('=');
+      return v ? `nwr["${k}"="${v}"](around:${radius},${near.lat},${near.lon});` : `nwr["${k}"]["name"](around:${radius},${near.lat},${near.lon});`;
+    }).join('');
+    const ql = `[out:json][timeout:10];(${parts});out center 150;`;
+    const body = 'data=' + encodeURIComponent(ql);
+    const tries = OVERPASS.map((ep) => getJSON(ep, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }, 10000)
+      .then((data) => {
+        if (!data || !Array.isArray(data.elements)) throw new Error('bad response');
+        return data.elements.map((el) => {
           const lat = finite(el.lat) ? el.lat : el.center && el.center.lat;
           const lon = finite(el.lon) ? el.lon : el.center && el.center.lon;
-          const street = [t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' ');
-          let extra = '';
-          if (cat.key === 'station') extra = t.station === 'subway' ? 'Underground' : (t.network || 'Station');
-          if (cat.key === 'toilets') extra = t.fee === 'no' ? 'Free' : t.fee === 'yes' ? 'Paid' : '';
-          if (cat.key === 'cash' && t.amenity === 'bank') extra = 'Bank';
-          return {
-            name: t.name || t.brand || t.operator || cat.label,
-            sub: [extra, street].filter(Boolean).join(' · '),
-            lat, lon, src: 'osm',
-          };
+          return osmPlace(cat, el.tags || {}, lat, lon);
         }).filter((p) => finite(p.lat) && finite(p.lon));
-      } catch (e) { lastErr = e; }
-    }
-    throw lastErr || new Error('Nearby search failed');
+      }));
+    return anySuccess(tries);
+  }
+
+  // Photon (no key) as a backup: search the category word with an OSM tag filter.
+  async function photonCategory(cat, near) {
+    const tags = cat.osm.map((t) => '&osm_tag=' + encodeURIComponent(t.replace('=', ':'))).join('');
+    const q = cat.photon || cat.words[0];
+    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=40&lang=en&lat=${near.lat}&lon=${near.lon}&location_bias_scale=0.9${tags}`;
+    const data = await getJSON(url, {}, 9000);
+    return (data.features || []).map((f) => {
+      const p = f.properties || {};
+      const t = { name: p.name, 'addr:street': p.street, 'addr:housenumber': p.housenumber, [p.osm_key]: p.osm_value };
+      return osmPlace(cat, t, f.geometry.coordinates[1], f.geometry.coordinates[0]);
+    }).filter((p) => distM(near, p) < 3000);
   }
 
   async function mapboxCategory(cat, near) {
-    const url = `https://api.mapbox.com/search/searchbox/v1/category/${cat.mapbox}?limit=20&language=${LANG.split('-')[0]}` +
+    const url = `https://api.mapbox.com/search/searchbox/v1/category/${cat.mapbox}?limit=25&language=${LANG.split('-')[0]}` +
       `&proximity=${near.lon},${near.lat}&access_token=${TOKEN}`;
-    const data = await getJSON(url);
+    const data = await getJSON(url, {}, 9000);
     return (data.features || []).map(mapboxFeature);
   }
 
-  function firstUseful(promises, timeout) {
+  function anySuccess(promises) {
     return new Promise((resolve, reject) => {
-      let pending = promises.length, lastErr = null, best = null;
-      const t = setTimeout(() => (best ? resolve(best) : reject(new Error('Nearby search timed out. Try again in a moment.'))), timeout);
-      promises.forEach((p) => p.then((l) => {
-        if (l && l.length) { clearTimeout(t); resolve(l); return; }
-        best = best || l;
-        if (--pending === 0) { clearTimeout(t); resolve(best || []); }
-      }, (e) => {
-        lastErr = e;
-        if (--pending === 0) { clearTimeout(t); best ? resolve(best) : reject(lastErr); }
-      }));
+      let left = promises.length, err;
+      promises.forEach((p) => p.then(resolve, (e) => { err = e; if (--left === 0) reject(err); }));
     });
   }
 
-  async function category(key, near) {
+  function mergeNearby(lists, near) {
+    const all = [].concat(...lists);
+    all.forEach((p) => { p.dist = distM(near, p); });
+    all.sort((a, b) => a.dist - b.dist);
+    const out = [];
+    for (const p of all) {
+      const dup = out.find((o) => distM(o, p) < 35 && (norm(o.name) === norm(p.name) || norm(o.name).includes(norm(p.name)) || norm(p.name).includes(norm(o.name))));
+      if (dup) { if (!dup.sub && p.sub) dup.sub = p.sub; continue; }
+      out.push(p);
+    }
+    return out.slice(0, 30);
+  }
+
+  // Nearby places in a category. Sources run in parallel; onUpdate(list) is
+  // called each time more arrive so the screen fills in quickly.
+  async function category(key, near, onUpdate) {
     const cat = typeof key === 'string' ? CATEGORIES.find((c) => c.key === key) : key;
     if (!cat) return [];
     if (!near) throw new Error('Nearby search needs your location.');
-    // OpenStreetMap (Overpass) and Mapbox race; the first useful answer wins.
-    const osm = (async () => {
-      let l = await overpass(cat, near, 900);
-      if (l.length < 3) l = await overpass(cat, near, 2500);
-      return l;
-    })();
-    const jobs = [osm];
+    const [r1, r2] = cat.radius || [900, 2500];
+    const lists = [], errors = [];
+    const push = (l) => { lists.push(l); const m = mergeNearby(lists, near); if (onUpdate && m.length) onUpdate(m); return m; };
+
+    const jobs = [
+      overpass(cat, near, r1).then(async (l) => (l.length >= 5 ? l : (await overpass(cat, near, r2).catch(() => l)))),
+      photonCategory(cat, near),
+    ];
     if (TOKEN) jobs.push(mapboxCategory(cat, near));
-    let list = await firstUseful(jobs, 20000);
-    list.forEach((p) => { p.dist = distM(near, p); });
-    list.sort((a, b) => a.dist - b.dist);
-    // Drop exact duplicates (a node and a building for the same place)
-    const out = [];
-    for (const p of list) if (!out.some((o) => norm(o.name) === norm(p.name) && distM(o, p) < 40)) out.push(p);
-    return out.slice(0, 12);
+    await Promise.all(jobs.map((p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), 14000))])
+      .then(push, (e) => errors.push(e && e.message))));
+    const merged = mergeNearby(lists, near);
+    if (!merged.length && errors.length === jobs.length) throw new Error('Couldn’t reach the map services (' + errors[0] + ').');
+    return merged;
   }
 
   // ------------------------------------------------------------ postcodes

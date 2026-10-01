@@ -45,12 +45,17 @@
     .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
     .link-btn { margin-left: auto; background: none; border: 0; color: var(--accent); font: inherit; font-weight: 600; padding: 6px; cursor: pointer; }
 
-    input[type=text], input[type=search] {
+    input[type=text], input[type=search], input[type=password] {
       width: 100%; font: inherit; font-size: 18px; color: var(--text);
       background: var(--bg); border: 1.5px solid var(--line); border-radius: 12px;
       padding: 12px 14px; outline: none; -webkit-appearance: none; appearance: none;
     }
-    input:focus { border-color: var(--accent); }
+    input:focus, select:focus { border-color: var(--accent); }
+    select {
+      width: 100%; font: inherit; font-size: 17px; color: var(--text); margin-top: 8px;
+      background: var(--bg); border: 1.5px solid var(--line); border-radius: 12px; padding: 12px 14px; -webkit-appearance: none; appearance: none;
+    }
+    #tts-key { margin-top: 2px; font-size: 16px; }
     #code-input { text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700; text-align: center; }
     .row { display: flex; gap: 8px; margin-top: 10px; }
     .btn {
@@ -126,6 +131,30 @@
     <div class="row" id="text-row" hidden><button class="btn secondary" id="send-text">Let the glasses search for this text</button></div>
   </section>
 
+  <section class="card" id="voice-card">
+    <p class="label">Voice for directions</p>
+    <p class="hint" style="margin-top:0">Out of the box the glasses use chimes (left turns in your left ear, right turns in your right). For a natural spoken voice, paste a Google Text-to-Speech key below. The README has the 5-minute setup.</p>
+    <input id="tts-key" type="password" placeholder="Google API key (starts AIza…)" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <select id="tts-voice" aria-label="Voice">
+      <option value="en-GB-Chirp3-HD-Charon">Charon · British, male, calm</option>
+      <option value="en-GB-Chirp3-HD-Fenrir">Fenrir · British, male, bright</option>
+      <option value="en-GB-Chirp3-HD-Orus">Orus · British, male, deep</option>
+      <option value="en-GB-Chirp3-HD-Algenib">Algenib · British, male, warm</option>
+      <option value="en-GB-Chirp3-HD-Kore">Kore · British, female, clear</option>
+      <option value="en-GB-Chirp3-HD-Aoede">Aoede · British, female, light</option>
+      <option value="en-GB-Chirp3-HD-Leda">Leda · British, female, young</option>
+      <option value="en-GB-Chirp3-HD-Despina">Despina · British, female, smooth</option>
+      <option value="en-GB-Neural2-B">Neural2 B · British, male (classic)</option>
+      <option value="en-GB-Neural2-C">Neural2 C · British, female (classic)</option>
+    </select>
+    <div class="row">
+      <button class="btn secondary" id="tts-preview">▶ Preview</button>
+      <button class="btn" id="tts-send">Send to glasses</button>
+    </div>
+    <p class="hint" id="tts-status"></p>
+    <button class="link-btn" id="tts-remove" style="margin-left:0;padding-left:0">Switch the glasses back to chimes</button>
+  </section>
+
   <section class="card" id="recent-card" hidden>
     <p class="label">Sent recently</p>
     <ul class="results" id="recent"></ul>
@@ -195,12 +224,13 @@
   $('pair-change').addEventListener('click', () => { code = ''; store.set('code', ''); $('code-input').value = ''; $('pair-save').disabled = true; renderPair(); $('code-input').focus(); });
 
   // ---------- sending
-  async function send(payload, silent = false) {
+  async function send(payload, silent = false, noCache = false) {
     if (!code) { toast('Pair with your glasses first'); $('code-input').focus(); return false; }
     try {
       const body = Object.assign({ v: 1 }, payload);
-      if (near) body.from = { lat: +near.lat.toFixed(6), lon: +near.lon.toFixed(6), acc: Math.round(near.acc || 50) };
-      const res = await fetch(`${RELAY}/waypoint-${code.toLowerCase()}`, { method: 'POST', body: JSON.stringify(body) });
+      if (near && !noCache) body.from = { lat: +near.lat.toFixed(6), lon: +near.lon.toFixed(6), acc: Math.round(near.acc || 50) };
+      // noCache: delivered only to glasses that are listening right now, never stored on the relay
+      const res = await fetch(`${RELAY}/waypoint-${code.toLowerCase()}${noCache ? '?cache=no' : ''}`, { method: 'POST', body: JSON.stringify(body) });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       if (!silent) {
         toast('Sent to glasses ✓');
@@ -291,6 +321,47 @@
   $('q').addEventListener('input', (e) => { clearTimeout(timer); timer = setTimeout(() => run(e.target.value, false), 350); });
   $('form').addEventListener('submit', (e) => { e.preventDefault(); clearTimeout(timer); $('q').blur(); run($('q').value, true); });
   $('send-text').addEventListener('click', () => { const t = $('q').value.trim(); if (t) send({ q: t }); });
+
+  // ---------- natural voice
+  const ttsKey = $('tts-key'), ttsVoice = $('tts-voice'), ttsStatus = $('tts-status');
+  ttsKey.value = store.get('ttsKey', '');
+  ttsVoice.value = store.get('ttsVoice', 'en-GB-Chirp3-HD-Charon');
+  ttsVoice.addEventListener('change', () => store.set('ttsVoice', ttsVoice.value));
+  ttsKey.addEventListener('change', () => store.set('ttsKey', ttsKey.value.trim()));
+  let previewAudio = null;
+  $('tts-preview').addEventListener('click', async () => {
+    const key = ttsKey.value.trim();
+    if (!key) { ttsStatus.textContent = 'Paste your Google API key first.'; ttsKey.focus(); return; }
+    ttsStatus.textContent = 'Fetching a sample…';
+    try {
+      const r = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize?key=' + encodeURIComponent(key), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: { text: 'In 60 metres, turn left onto Regent Street.' },
+          voice: { languageCode: ttsVoice.value.split('-').slice(0, 2).join('-'), name: ttsVoice.value },
+          audioConfig: { audioEncoding: 'MP3', speakingRate: 1.05 } }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error((j.error && j.error.message) || 'HTTP ' + r.status);
+      if (previewAudio) previewAudio.pause();
+      previewAudio = new Audio('data:audio/mpeg;base64,' + j.audioContent);
+      await previewAudio.play();
+      ttsStatus.textContent = 'Like it? Tap Send to glasses (with Waypoint open on them).';
+      store.set('ttsKey', key);
+    } catch (e) {
+      ttsStatus.textContent = 'Google said: ' + e.message + (/referer|referrer/i.test(e.message) ? ' (check the website restriction on your key includes this page)' : '');
+    }
+  });
+  $('tts-send').addEventListener('click', async () => {
+    const key = ttsKey.value.trim();
+    if (!key) { ttsStatus.textContent = 'Paste your Google API key first.'; ttsKey.focus(); return; }
+    store.set('ttsKey', key);
+    const ok = await send({ voiceKey: key, voiceName: ttsVoice.value }, true, true);
+    ttsStatus.textContent = ok ? 'Sent. The glasses should say hello in the new voice. Nothing? Make sure Waypoint is open on them and send again.' : 'Couldn\u2019t send — check your connection.';
+  });
+  $('tts-remove').addEventListener('click', async () => {
+    const ok = await send({ voiceKey: '' }, true, true);
+    ttsStatus.textContent = ok ? 'The glasses are back on chimes.' : 'Couldn\u2019t send.';
+  });
 
   // ---------- boot
   const here = location.origin + location.pathname;

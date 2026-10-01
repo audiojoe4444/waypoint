@@ -444,26 +444,167 @@
   }
 
   // ------------------------------------------------------------------ voice
+  // Sound has four modes:
+  //   'voice'  — natural Google voice (needs a key, set from the phone page)
+  //   'chimes' — short tones; left turns play in the left ear, right in the right
+  //   'system' — the glasses' built-in voice
+  //   'off'
+  const DIR_KIND = { left: 'left', 'slight-left': 'left', 'sharp-left': 'left', 'keep-left': 'left', uturn: 'left',
+    right: 'right', 'slight-right': 'right', 'sharp-right': 'right', 'keep-right': 'right', arrive: 'arrive' };
+
   const Voice = {
-    on: store.get('voice', CFG.VOICE),
+    key: store.get('ttsKey', CFG.GOOGLE_TTS_KEY || ''),
+    voiceName: store.get('ttsVoice', CFG.VOICE_NAME || 'en-GB-Chirp3-HD-Charon'),
+    mode: null,
     ok: 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window,
-    say(text, interrupt = false) {
-      if (!Voice.on || !Voice.ok || !text) return;
-      try {
-        if (interrupt) speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = CFG.LANGUAGE;
-        u.rate = 1.05;
-        speechSynthesis.speak(u);
-      } catch (e) { console.warn('TTS', e); }
+    ctx: null, cache: new Map(), gen: 0, chain: Promise.resolve(), playing: null,
+
+    init() {
+      const saved = store.get('sound', null);
+      Voice.mode = saved && Voice.modes().includes(saved) ? saved : (CFG.VOICE === false ? 'off' : Voice.key ? 'voice' : 'chimes');
     },
-    toggle() {
-      Voice.on = !Voice.on;
-      store.set('voice', Voice.on);
-      if (!Voice.on && Voice.ok) speechSynthesis.cancel();
-      $('btn-voice').textContent = 'Voice: ' + (Voice.on ? 'On' : 'Off');
+    modes() { return (Voice.key ? ['voice'] : []).concat(['chimes', 'system', 'off']); },
+    label() { return { voice: 'Natural voice', chimes: 'Chimes', system: 'Glasses voice', off: 'Off' }[Voice.mode]; },
+    get on() { return Voice.mode !== 'off'; },
+    cycle() {
+      const m = Voice.modes();
+      Voice.mode = m[(m.indexOf(Voice.mode) + 1) % m.length];
+      store.set('sound', Voice.mode);
+      Voice.stop();
+      const b = $('btn-voice'); if (b) b.textContent = 'Sound: ' + Voice.label();
+      Voice.say(Voice.mode === 'chimes' ? '' : 'Sound on.', true, { kind: 'info' });
+    },
+    setKey(key, name) {
+      Voice.key = key || '';
+      if (name) Voice.voiceName = name;
+      store.set('ttsKey', Voice.key); store.set('ttsVoice', Voice.voiceName);
+      Voice.cache.clear();
+      Voice.mode = Voice.key ? 'voice' : 'chimes';
+      store.set('sound', Voice.mode);
+    },
+
+    // Audio needs one tap/pinch before it may play; call on any input.
+    unlock() {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        if (!Voice.ctx) Voice.ctx = new AC();
+        if (Voice.ctx.state === 'suspended') Voice.ctx.resume();
+      } catch { /* no web audio */ }
+    },
+
+    stop() {
+      Voice.gen++;
+      Voice.chain = Promise.resolve();
+      try { if (Voice.playing) Voice.playing.stop ? Voice.playing.stop() : Voice.playing.pause(); } catch { /* already stopped */ }
+      Voice.playing = null;
+      if (Voice.ok) try { speechSynthesis.cancel(); } catch { /* ignore */ }
+    },
+
+    // ---- chimes (Web Audio)
+    tone(freq, start, dur, pan = 0, vol = 0.22, type = 'sine') {
+      const c = Voice.ctx; if (!c) return;
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type; o.frequency.value = freq;
+      const t0 = c.currentTime + start;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol, t0 + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      let node = o.connect(g);
+      if (c.createStereoPanner) { const p = c.createStereoPanner(); p.pan.value = pan; node = g.connect(p); p.connect(c.destination); }
+      else g.connect(c.destination);
+      o.start(t0); o.stop(t0 + dur + 0.05);
+    },
+    chime(kind) {
+      Voice.unlock();
+      if (!Voice.ctx) return;
+      const T = (f, s, d, p, v) => Voice.tone(f, s, d, p, v);
+      switch (kind) {
+        case 'prepare-left': T(784, 0, 0.35, -0.8, 0.16); break;
+        case 'prepare-right': T(784, 0, 0.35, 0.8, 0.16); break;
+        case 'prepare': T(784, 0, 0.35, 0, 0.16); break;
+        case 'left': T(988, 0, 0.22, -0.9); T(740, 0.16, 0.4, -0.9); break;     // falling, left ear
+        case 'right': T(740, 0, 0.22, 0.9); T(988, 0.16, 0.4, 0.9); break;     // rising, right ear
+        case 'straight': T(880, 0, 0.18); T(880, 0.2, 0.3); break;
+        case 'arrive': T(523, 0, 0.3); T(659, 0.15, 0.3); T(784, 0.3, 0.6); break;
+        case 'reroute': T(440, 0, 0.25, 0, 0.18); T(392, 0.22, 0.4, 0, 0.18); break;
+        case 'info': T(1046, 0, 0.18, 0, 0.12); break;
+        default: break;
+      }
+    },
+
+    // ---- natural voice (Google Cloud Text-to-Speech)
+    synth(text) {
+      if (Voice.cache.has(text)) return Voice.cache.get(text);
+      const p = fetch('https://texttospeech.googleapis.com/v1/text:synthesize?key=' + encodeURIComponent(Voice.key), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input: { text },
+          voice: { languageCode: Voice.voiceName.split('-').slice(0, 2).join('-'), name: Voice.voiceName },
+          audioConfig: { audioEncoding: 'MP3', speakingRate: 1.05 },
+        }),
+      }).then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.audioContent) throw new Error((j.error && j.error.message) || 'HTTP ' + r.status);
+        const bin = atob(j.audioContent), buf = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+        return buf.buffer;
+      });
+      p.catch(() => Voice.cache.delete(text));
+      Voice.cache.set(text, p);
+      if (Voice.cache.size > 120) Voice.cache.delete(Voice.cache.keys().next().value);
+      return p;
+    },
+    prefetch(texts) {
+      if (Voice.mode !== 'voice' || !Voice.key) return;
+      [...new Set(texts.filter(Boolean))].slice(0, 40).forEach((t, i) => setTimeout(() => Voice.synth(t).catch(() => {}), i * 120));
+    },
+    async playBuffer(buf, pan, gen) {
+      if (gen !== Voice.gen) return;
+      Voice.unlock();
+      const c = Voice.ctx;
+      if (c) {
+        const audio = await c.decodeAudioData(buf.slice(0));
+        if (gen !== Voice.gen) return;
+        const src = c.createBufferSource(); src.buffer = audio;
+        let last = src;
+        if (pan && c.createStereoPanner) { const p = c.createStereoPanner(); p.pan.value = pan; src.connect(p); last = p; }
+        last.connect(c.destination);
+        Voice.playing = src;
+        await new Promise((res) => { src.onended = res; src.start(); });
+      } else {
+        const url = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' }));
+        const el = new Audio(url); Voice.playing = el;
+        await new Promise((res) => { el.onended = res; el.onerror = res; el.play().catch(res); });
+        URL.revokeObjectURL(url);
+      }
+    },
+
+    // say(text, interrupt, { kind }) — kind: 'left' | 'right' | 'straight' | 'prepare-left' | … | 'arrive' | 'reroute' | 'info'
+    say(text, interrupt = false, opts = {}) {
+      const kind = opts.kind || null;
+      if (Voice.mode === 'off') return;
+      if (interrupt) Voice.stop();
+      if (Voice.mode === 'chimes') { if (kind) Voice.chime(kind); return; }
+      if (!text) { if (kind) Voice.chime(kind); return; }
+      if (Voice.mode === 'system') {
+        if (!Voice.ok) return;
+        try { const u = new SpeechSynthesisUtterance(text); u.lang = CFG.LANGUAGE; u.rate = 1.05; speechSynthesis.speak(u); } catch (e) { console.warn('TTS', e); }
+        return;
+      }
+      // natural voice: queue so phrases never overlap; pan turns slightly toward their side
+      const gen = Voice.gen;
+      const pan = /left/.test(kind || '') ? -0.5 : /right/.test(kind || '') ? 0.5 : 0;
+      const job = Voice.synth(text);
+      Voice.chain = Voice.chain.then(() => job).then((buf) => Voice.playBuffer(buf, pan, gen)).catch((e) => {
+        console.warn('voice', e);
+        if (gen === Voice.gen && kind) Voice.chime(kind);    // network trouble: fall back to a chime
+      });
     },
   };
+  Voice.init();
+  ['pointerdown', 'keydown', 'click'].forEach((ev) => document.addEventListener(ev, () => Voice.unlock(), { capture: true, passive: true }));
 
   // ------------------------------------------------------------------ heading (compass)
   const Heading = {
@@ -679,13 +820,18 @@
   let searchSeq = 0;
   let lastQuery = { q: '', at: 0 };
 
-  function showResults(list, near, status) {
+  function showResults(list, near, status, keepFocus = false) {
+    // When the list grows while you're looking at it, keep your place.
+    const items = [...$('results-list').children];
+    const idx = items.indexOf(document.activeElement);
     $('results-status').textContent = status || '';
     $('results-list').replaceChildren(...list.map((p) => {
       const meta = near ? fmtDist(finite(p.dist) ? p.dist : haversine([near.lat, near.lon], [p.lat, p.lon])) : '';
-      return placeButton(p, p.src === 'postcode' ? 'pin' : 'pin', meta);
+      return placeButton(p, 'pin', meta);
     }));
-    if (current === 'results') focusScreen('results');
+    if (current !== 'results') return;
+    if (keepFocus && idx >= 0) { const el = $('results-list').children[Math.min(idx, list.length - 1)]; if (el) el.focus({ preventScroll: true }); }
+    else if (!keepFocus || !$('screen-results').contains(document.activeElement) || document.activeElement === $('research-input')) focusScreen('results');
   }
 
   async function doSearch(raw, mode = 'push') {
@@ -718,7 +864,7 @@
       if (!res.results.length) {
         showResults([], near, res.kind === 'postcode' ? 'That postcode wasn’t found. Try saying it letter by letter.'
           : 'No places found. Try again, add the town, or send it from your phone.');
-        Voice.say('Nothing found.', true);
+        Voice.say('Nothing found.', true, { kind: 'info' });
         return;
       }
       showResults(res.results, near, near ? '' : 'Location unavailable — results may be far away.');
@@ -751,10 +897,15 @@
     }
     if (seq !== searchSeq) return;
     $('results-status').textContent = 'Looking nearby…';
+    let shown = false;
     try {
-      const list = await WPSearch.category(key, near);
+      const list = await WPSearch.category(key, near, (partial) => {
+        if (seq !== searchSeq) return;
+        showResults(partial, near, 'Looking for more…', shown);
+        shown = true;
+      });
       if (seq !== searchSeq) return;
-      showResults(list, near, list.length ? '' : 'Nothing found within 2.5 km.');
+      showResults(list, near, list.length ? (list.length + ' nearby' + (near.src === 'phone' ? ' · using your phone\u2019s location' : '')) : 'Nothing found nearby.', shown);
     } catch (e) {
       if (seq !== searchSeq) return;
       $('results-status').textContent = e.message || 'Nearby search failed.';
@@ -840,7 +991,13 @@
         renderLocBadge();
         if (nav && nav.active && !Loc.fresh(30000)) onPosition(Loc.phone);
       }
-      if (p.ping) { toast('Phone paired ✓', 3000); Voice.say('Phone paired.'); return; }
+      if (typeof p.voiceKey === 'string') {
+        Voice.setKey(p.voiceKey, p.voiceName);
+        toast(p.voiceKey ? 'Natural voice set ✓' : 'Natural voice removed', 3500);
+        Voice.say(p.voiceKey ? 'Hello. This is your new Waypoint voice.' : '', true, { kind: 'info' });
+        return;
+      }
+      if (p.ping) { toast('Phone paired ✓', 3000); Voice.say('Phone paired.', false, { kind: 'info' }); return; }
       const place = (finite(p.lat) && finite(p.lon)) ? { name: p.name || 'Pinned location', sub: p.sub || '', lat: p.lat, lon: p.lon } : null;
       const label = place ? place.name : p.q;
       if (!label) return;
@@ -849,7 +1006,7 @@
         toast('From phone: ' + label + (place ? ' (in Recent)' : ''), 5000);
         return;
       }
-      Voice.say('From your phone: ' + label + '.', true);
+      Voice.say('From your phone: ' + label + '.', true, { kind: 'info' });
       if (place) openPreview(place, current === 'preview' ? 'replace' : 'push');
       else doSearch(p.q);
     },
@@ -944,14 +1101,15 @@
     addRecent(nav.dest);
     $('search-input').value = '';
     $('nav-menu').hidden = true;
-    $('btn-voice').textContent = 'Voice: ' + (Voice.on ? 'On' : 'Off');
+    $('btn-voice').textContent = 'Sound: ' + Voice.label();
     show('nav');
     keepAwake(true);
 
     if (nav.route) {
+      prefetchRoute(nav.route);
       const first = nav.route.steps[0];
-      if (first) { Voice.say(first.verbal, true); toast(first.text, 5000); }
-    } else Voice.say('Finding your location.', true);
+      if (first) { Voice.say(first.verbal, true, { kind: 'straight' }); toast(first.text, 5000); }
+    } else Voice.say('Finding your location.', true, { kind: 'info' });
 
     Loc.watch(onPosition);
     const startPos = nav.pos || Loc.fresh(10 * 60000) || Loc.phoneFresh();
@@ -968,7 +1126,8 @@
       if (!nav || !nav.active) return;
       Object.assign(nav, { route: r, routing: false, along: 0, seg: 0, stepIdx: 1, announced: {}, lastReroute: Date.now() });
       const first = r.steps[0];
-      if (first) { Voice.say(first.verbal, true); toast(first.text, 5000); }
+      prefetchRoute(r);
+      if (first) { Voice.say(first.verbal, true, { kind: 'straight' }); toast(first.text, 5000); }
       onPosition(nav.pos);
       staleCheck();
     }).catch((e) => {
@@ -1015,10 +1174,28 @@
       nav.stepIdx = idx;
       // Just completed a turn: tell them how long the next stretch is, if it's long.
       const legLen = r.cum[r.steps[idx].beginIdx] - nav.along;
-      if (idx > prevIdx && legLen > 150 && r.steps[idx].kind !== 'arrive') Voice.say('Continue for ' + spokenDist(legLen) + '.');
+      if (idx > prevIdx && legLen > 150 && r.steps[idx].kind !== 'arrive') Voice.say(continuePhrase(r, idx));
     }
     announce();
     renderNav();
+  }
+
+  // Fixed wording so phrases can be fetched ahead of time (no waiting at a junction).
+  const farPhrase = (verbal) => 'In ' + spokenDist(FAR_ANNOUNCE) + ', ' + lcFirst(trimDot(verbal)) + '.';
+  function continuePhrase(r, idx) {
+    const prev = r.steps[idx - 1];
+    const legLen = r.cum[r.steps[idx].beginIdx] - r.cum[prev ? prev.beginIdx : 0];
+    return 'Continue for ' + spokenDist(legLen) + '.';
+  }
+  function prefetchRoute(r) {
+    const t = [];
+    r.steps.forEach((s, i) => {
+      if (i === 0) { t.push(s.verbal); return; }
+      const verbal = s.kind === 'arrive' ? 'Your destination is ahead.' : s.verbal;
+      t.push(trimDot(verbal) + '.', farPhrase(verbal), continuePhrase(r, i));
+    });
+    t.push('Re-routing.');
+    Voice.prefetch(t);
   }
 
   function announce() {
@@ -1028,13 +1205,14 @@
     const legLen = r.cum[step.beginIdx] - r.cum[r.steps[i - 1] ? r.steps[i - 1].beginIdx : 0];
     const a = nav.announced[i] || (nav.announced[i] = {});
     const verbal = step.kind === 'arrive' ? 'Your destination is ahead.' : step.verbal;
+    const dir = DIR_KIND[step.kind] || 'straight';
     if (!a.far && d <= FAR_ANNOUNCE && d > NEAR_ANNOUNCE + 15 && legLen > FAR_ANNOUNCE + 20) {
       a.far = true;
-      Voice.say('In ' + spokenDist(d) + ', ' + lcFirst(trimDot(verbal)) + '.');
+      Voice.say(farPhrase(verbal), false, { kind: dir === 'left' ? 'prepare-left' : dir === 'right' ? 'prepare-right' : 'prepare' });
     }
     if (!a.near && d <= NEAR_ANNOUNCE + 5) {
       a.near = true; a.far = true;
-      Voice.say(trimDot(verbal) + '.', true);
+      Voice.say(trimDot(verbal) + '.', true, { kind: dir === 'arrive' ? 'prepare' : dir });
     }
   }
 
@@ -1044,7 +1222,7 @@
     nav.rerouting = true;
     nav.lastReroute = Date.now();
     toast('Re-planning route…', 2500);
-    Voice.say('Re-routing.', true);
+    Voice.say('Re-routing.', true, { kind: 'reroute' });
     try {
       const route = await getRoute(p || nav.pos, nav.dest);
       if (!nav || !nav.active) return;
@@ -1061,7 +1239,7 @@
   function arrive() {
     const name = nav.dest.name;
     stopNav();
-    Voice.say('You have arrived at ' + name + '.', true);
+    Voice.say('You have arrived at ' + name + '.', true, { kind: 'arrive' });
     $('arrive-name').textContent = name;
     show('arrive', 'replace');
   }
@@ -1076,7 +1254,7 @@
 
   function endRoute() {
     stopNav();
-    if (Voice.ok) speechSynthesis.cancel();
+    Voice.stop();
     nav = null;
     $('nav-menu').hidden = true;
     goHome();
@@ -1115,6 +1293,11 @@
 
   function openMenu() {
     $('nav-menu').hidden = false;
+    $('toast').hidden = true;
+    // The glasses may move focus after Back, so put it on Resume a few times.
+    const resume = () => { if (!$('nav-menu').hidden) document.querySelector('#nav-menu [data-action="resume"]').focus(); };
+    [0, 60, 200, 450].forEach((ms) => setTimeout(resume, ms));
+    $('btn-voice').textContent = 'Sound: ' + Voice.label();
     const mm = document.querySelector('[data-action="mapmode"]');
     if (mm) mm.textContent = 'Map: ' + (nav && nav.mapMode === 'north' ? 'North up' : 'Facing up');
     focusScreen('nav');
@@ -1268,6 +1451,71 @@
 
   window.addEventListener('resize', requestDraw);
 
+  // ------------------------------------------------------------------ focus movement
+  // The glasses move focus with the arrow keys. The built-in spatial navigation
+  // can get stuck at the edge of a scrolling list (e.g. never reaching Recent),
+  // so Waypoint moves focus itself: nearest control in the pressed direction,
+  // scrolled into view.
+  const FocusNav = {
+    scope() {
+      if (current === 'nav') return $('nav-menu').hidden ? null : $('nav-menu');
+      return document.querySelector('.screen:not([hidden])');
+    },
+    items(scope) {
+      return [...scope.querySelectorAll('button, input, [tabindex="0"]')].filter((el) =>
+        !el.disabled && el.id !== 'nav-focus' && !el.closest('[hidden]') && el.getClientRects().length);
+    },
+    move(dir) {
+      const scope = FocusNav.scope();
+      if (!scope) return false;
+      const items = FocusNav.items(scope);
+      if (!items.length) return false;
+      const cur = document.activeElement;
+      if (!cur || !scope.contains(cur) || cur === document.body) { items[0].focus(); return true; }
+
+      // A focused scroll area scrolls first, then hands focus on at its edge.
+      if (cur.classList.contains('scroll') && (dir === 'down' || dir === 'up')) {
+        const before = cur.scrollTop;
+        cur.scrollBy({ top: (dir === 'down' ? 1 : -1) * cur.clientHeight * 0.6 });
+        if (cur.scrollTop !== before) return true;
+      }
+
+      const r = cur.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      let best = null, bestScore = Infinity;
+      for (const el of items) {
+        if (el === cur) continue;
+        const b = el.getBoundingClientRect();
+        const ex = b.left + b.width / 2, ey = b.top + b.height / 2;
+        let along, across;
+        if (dir === 'down') { if (b.top < r.bottom - 6) continue; along = b.top - r.bottom; across = overlapGap(r.left, r.right, b.left, b.right, cx, ex); }
+        else if (dir === 'up') { if (b.bottom > r.top + 6) continue; along = r.top - b.bottom; across = overlapGap(r.left, r.right, b.left, b.right, cx, ex); }
+        else if (dir === 'right') { if (b.left < r.right - 6) continue; along = b.left - r.right; across = overlapGap(r.top, r.bottom, b.top, b.bottom, cy, ey); }
+        else { if (b.right > r.left + 6) continue; along = r.left - b.right; across = overlapGap(r.top, r.bottom, b.top, b.bottom, cy, ey); }
+        const score = Math.max(0, along) + across * 2.5;
+        if (score < bestScore) { bestScore = score; best = el; }
+      }
+      if (best) {
+        best.focus({ preventScroll: true });
+        best.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        return true;
+      }
+      return true;   // at the edge: stay put rather than letting the page jump
+    },
+  };
+  // 0 when the two ranges overlap; otherwise how far apart they are (falls back to centre distance)
+  function overlapGap(a1, a2, b1, b2, ca, cb) {
+    if (b1 < a2 && b2 > a1) return Math.abs(ca - cb) * 0.05;
+    return Math.min(Math.abs(b1 - a2), Math.abs(a1 - b2), Math.abs(ca - cb));
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const dir = { ArrowDown: 'down', ArrowUp: 'up', ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
+    if (!dir) return;
+    if (current === 'nav' && $('nav-menu').hidden) return;   // the route screen has its own keys
+    if (FocusNav.move(dir)) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
   // ------------------------------------------------------------------ input
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-action]');
@@ -1277,7 +1525,7 @@
       else if (a === 'go') startNav();
       else if (a === 'save') toggleSave();
       else if (a === 'resume') closeMenu();
-      else if (a === 'voice') Voice.toggle();
+      else if (a === 'voice') Voice.cycle();
       else if (a === 'mapmode') {
         nav.mapMode = nav.mapMode === 'north' ? 'auto' : 'north';
         store.set('mapMode', nav.mapMode);
