@@ -690,22 +690,28 @@
   let lastKeyAt = 0;
   document.addEventListener('keydown', () => { lastKeyAt = Date.now(); }, true);
 
-  // Home always opens with an empty "Where to?" box, focused and ready.
-  // The glasses can move focus around just after a page change, so we place
-  // it a few times — but stop as soon as you've pressed anything yourself.
-  function focusHome() {
-    const input = $('search-input');
-    input.value = '';
+  // The glasses can move focus around just after a screen changes (often to
+  // the Back button, top-left). So we place focus a few times over the first
+  // second — and stop the moment you press anything yourself.
+  function holdFocus(screen, getEl) {
     const since = Date.now();
     const put = () => {
-      if (current !== 'home' || lastKeyAt > since) return;
-      if (document.activeElement !== input) input.focus({ preventScroll: true });
+      if (current !== screen || lastKeyAt > since) return;
+      const el = getEl();
+      if (el && document.activeElement !== el) el.focus({ preventScroll: true });
     };
     [0, 80, 250, 600, 1200].forEach((ms) => setTimeout(put, ms));
   }
 
+  // Home always opens with an empty "Where to?" box, focused and ready.
+  function focusHome() {
+    $('search-input').value = '';
+    holdFocus('home', () => $('search-input'));
+  }
+
   function focusScreen(name) {
     if (name === 'home') { focusHome(); return; }
+    if (name === 'preview') { holdFocus('preview', () => $('btn-go')); return; }
     requestAnimationFrame(() => {
       let el = null;
       if (name === 'home') el = $('search-input');
@@ -799,19 +805,20 @@
     return s < 60 ? s + ' s ago' : s < 3600 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago';
   }
 
+  // The Waypoint logo + title is the location status: green outline = all
+  // good, red = a problem (select it to see why), pulsing grey = still finding you.
   function renderLocBadge() {
-    const b = $('loc-badge');
+    const b = $('brand-btn');
     if (!b) return;
     const st = Loc.status.state, f = Loc.fresh(120000);
-    let text = 'Location', cls = '';
-    if (DEMO) { text = 'Demo'; cls = 'ok'; }
-    else if (f) { text = '±' + Math.round(f.accuracy || 0) + ' m'; cls = 'ok'; }
-    else if (st === 'denied') { text = 'Blocked'; cls = 'bad'; }
-    else if (Loc.phoneFresh()) { text = 'Phone loc'; cls = 'ok'; }
-    else if ((st === 'searching' || st === 'idle') && Date.now() - (Loc.firstStartAt || Date.now()) < 30000) text = 'Locating…';
-    else { text = 'No GPS'; cls = 'bad'; }
-    b.className = 'loc-badge ' + cls;
-    $('loc-text').textContent = text;
+    let cls = 'wait', say = 'finding you';
+    if (DEMO || f) { cls = 'ok'; say = f ? 'good, accurate to ' + Math.round(f.accuracy || 0) + ' metres' : 'demo'; }
+    else if (Loc.phoneFresh()) { cls = 'ok'; say = 'using your phone'; }
+    else if (st === 'denied') { cls = 'bad'; say = 'blocked'; }
+    else if ((st === 'searching' || st === 'idle') && Date.now() - (Loc.firstStartAt || Date.now()) < 30000) { cls = 'wait'; }
+    else { cls = 'bad'; say = 'no signal'; }
+    b.className = 'brand ' + cls;
+    b.setAttribute('aria-label', 'Waypoint. Location: ' + say + '. Select for details.');
     if (current === 'loc') renderLocInfo();
   }
 
