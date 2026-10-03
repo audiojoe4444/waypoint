@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="application-name" content="Waypoint">
   <meta name="theme-color" content="#000000">
+  <!-- Only the site name (never the address, which may hold your backup key) is sent to other sites. -->
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>Waypoint</title>
   <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -80,7 +82,7 @@
     <section id="screen-loc" class="screen" data-screen="loc" hidden>
       <div class="topbar">
         <button class="back" data-action="back" aria-label="Back">‹</button>
-        <h1 class="title">Location</h1>
+        <h1 class="title">Status</h1>
       </div>
       <div class="scroll" tabindex="0" aria-label="Location details and help">
         <dl id="loc-info" class="kv"></dl>

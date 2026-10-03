@@ -38,8 +38,191 @@
 
   const store = {
     get(k, d) { try { const v = localStorage.getItem('wp.' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
-    set(k, v) { try { localStorage.setItem('wp.' + k, JSON.stringify(v)); } catch { /* storage full or blocked */ } },
+    set(k, v) {
+      try { localStorage.setItem('wp.' + k, JSON.stringify(v)); } catch { /* storage full or blocked */ }
+      if (Backup.KEYS.includes(k)) Backup.changed();
+    },
   };
+
+  // ------------------------------------------------------------------ backup to your GitHub
+  // Glasses software updates can wipe a web app's saved data. Like GlassCast,
+  // Waypoint keeps an encrypted copy in a private gist in your own GitHub
+  // account and restores it automatically.
+  //  · Key: ?sync=YOUR-GITHUB-TOKEN (classic token, "gist" permission only) on
+  //    the app address in the Meta AI app. Never stored in the code or repo.
+  //  · Encryption: PBKDF2-SHA256 (150k) over the token → AES-GCM-256.
+  //  · One gist per app: file "waypoint-backup.json".
+  const Backup = {
+    KEYS: ['favs', 'recents', 'sound', 'ttsKey', 'ttsVoice', 'mapMode', 'pairCode'],
+    FILE: 'waypoint-backup.json',
+    API: 'https://api.github.com',
+    token: (() => {
+      const q = new URLSearchParams(location.search).get('sync');
+      const h = new URLSearchParams(location.hash.replace(/^#/, '')).get('sync');
+      return (q || h || '').trim();
+    })(),
+    status: 'off',      // off | checking | ok | offline | badkey | otherkey | error
+    savedAt: 0,
+    timer: null,
+    busy: false,
+    pending: false,
+    blocked: false,     // a backup made with a different key exists: never overwrite it
+
+    enabled() { return !!Backup.token && !DEMO; },
+    headers() {
+      return { Authorization: 'Bearer ' + Backup.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+    },
+
+    setStatus(s) {
+      Backup.status = s;
+      if (typeof renderLocInfo === 'function' && current === 'loc') renderLocInfo();
+    },
+    label() {
+      switch (Backup.status) {
+        case 'off': return 'Off (add ?sync= to the address)';
+        case 'checking': return 'Checking…';
+        case 'ok': return 'Backed up · ' + (Backup.savedAt ? fmtClock(new Date(Backup.savedAt)) : 'just now');
+        case 'offline': return 'Waiting for a connection';
+        case 'badkey': return 'Key not accepted by GitHub';
+        case 'otherkey': return 'Backup made with a different key';
+        default: return 'Problem saving — will retry';
+      }
+    },
+
+    // ---- crypto
+    b64(buf) { let s = ''; new Uint8Array(buf).forEach((b) => { s += String.fromCharCode(b); }); return btoa(s); },
+    unb64(str) { const s = atob(str), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; },
+    async aesKey(salt) {
+      const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(Backup.token), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 150000 }, base,
+        { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    },
+    async encrypt(obj) {
+      const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await Backup.aesKey(salt);
+      const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+      return { app: 'waypoint', v: 1, salt: Backup.b64(salt), iv: Backup.b64(iv), data: Backup.b64(data) };
+    },
+    async decrypt(file) {
+      const key = await Backup.aesKey(Backup.unb64(file.salt));
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Backup.unb64(file.iv) }, key, Backup.unb64(file.data));
+      return JSON.parse(new TextDecoder().decode(plain));
+    },
+
+    // ---- GitHub
+    async gh(path, opts = {}) {
+      let res;
+      try { res = await fetch(Backup.API + path, Object.assign({ headers: Backup.headers(), cache: 'no-store' }, opts)); }
+      catch (e) { const err = new Error('offline'); err.kind = 'offline'; throw err; }
+      if (res.status === 401 || res.status === 403) { const err = new Error('badkey'); err.kind = 'badkey'; throw err; }
+      if (res.status === 404) { const err = new Error('missing'); err.kind = 'missing'; throw err; }
+      if (!res.ok) { const err = new Error('HTTP ' + res.status); err.kind = 'error'; throw err; }
+      return res.json();
+    },
+    async findGist() {
+      const cached = store.get('backupGist', null);
+      if (cached) {
+        try { return await Backup.gh('/gists/' + cached); }
+        catch (e) { if (e.kind !== 'missing') throw e; localStorage.removeItem('wp.backupGist'); }
+      }
+      for (let page = 1; page <= 10; page++) {
+        const list = await Backup.gh('/gists?per_page=100&page=' + page);
+        const hit = list.find((g) => g.files && g.files[Backup.FILE]);
+        if (hit) { store.set('backupGist', hit.id); return Backup.gh('/gists/' + hit.id); }
+        if (list.length < 100) break;
+      }
+      return null;
+    },
+    async readFile(gist) {
+      const f = gist.files[Backup.FILE];
+      if (!f) return null;
+      const text = f.truncated && f.raw_url ? await (await fetch(f.raw_url, { cache: 'no-store' })).text() : f.content;
+      return JSON.parse(text);
+    },
+
+    snapshot() {
+      const items = {};
+      Backup.KEYS.forEach((k) => { const raw = localStorage.getItem('wp.' + k); if (raw != null) items[k] = JSON.parse(raw); });
+      return { savedAt: store.get('localSavedAt', 0) || Date.now(), items };
+    },
+    // "Empty" = none of your own data yet (an automatic pairing code doesn't count).
+    localIsEmpty() { return !Backup.KEYS.filter((k) => k !== 'pairCode').some((k) => localStorage.getItem('wp.' + k) != null); },
+    placesIn(items) { return ((items && items.favs) || []).length + ((items && items.recents) || []).length; },
+    remotePlaces: 0,
+
+    // ---- launch: restore if this device is empty or the backup is newer
+    async start() {
+      if (!Backup.enabled()) { Backup.setStatus('off'); return; }
+      Backup.setStatus('checking');
+      try {
+        const gist = await Backup.findGist();
+        if (!gist) { await Backup.save(true); return; }       // first run: create it
+        const file = await Backup.readFile(gist);
+        let data;
+        try { data = await Backup.decrypt(file); }
+        catch { Backup.blocked = true; Backup.setStatus('otherkey'); return; }
+        Backup.savedAt = data.savedAt || 0;
+        Backup.remotePlaces = Backup.placesIn(data.items);
+        const localAt = store.get('localSavedAt', 0);
+        if (Backup.localIsEmpty() || (data.savedAt || 0) > localAt) {
+          Object.entries(data.items || {}).forEach(([k, v]) => {
+            if (Backup.KEYS.includes(k)) try { localStorage.setItem('wp.' + k, JSON.stringify(v)); } catch { /* ignore */ }
+          });
+          localStorage.setItem('wp.localSavedAt', JSON.stringify(data.savedAt || Date.now()));
+          try { sessionStorage.setItem('wp.restored', '1'); } catch { /* ignore */ }
+          location.reload();                                    // start fresh with the restored data
+          return;
+        }
+        if (localAt > (data.savedAt || 0)) await Backup.save(true); else Backup.setStatus('ok');
+      } catch (e) {
+        Backup.setStatus(e.kind === 'badkey' ? 'badkey' : e.kind === 'offline' ? 'offline' : 'error');
+        if (e.kind === 'offline') setTimeout(Backup.start, 60000);
+      }
+    },
+
+    changed() {
+      try { localStorage.setItem('wp.localSavedAt', JSON.stringify(Date.now())); } catch { /* ignore */ }
+      if (!Backup.enabled()) return;
+      clearTimeout(Backup.timer);
+      Backup.timer = setTimeout(() => Backup.save(), 3000);
+    },
+
+    async save(force = false, keepalive = false) {
+      if (!Backup.enabled() || Backup.blocked) return;
+      if (Backup.busy) { Backup.pending = true; return; }
+      Backup.busy = true;
+      try {
+        const snap = Backup.snapshot();
+        if (!force && snap.savedAt <= Backup.savedAt) { Backup.setStatus('ok'); return; }
+        // Safety net: never replace a backup that has places with a device that has
+        // never had any (e.g. just wiped). Deliberately clearing them still saves.
+        if (Backup.remotePlaces > 0 && snap.items.favs === undefined && snap.items.recents === undefined) { Backup.setStatus('ok'); return; }
+        const body = JSON.stringify({ description: 'Waypoint backup (encrypted)', files: { [Backup.FILE]: { content: JSON.stringify(await Backup.encrypt(snap)) } } });
+        const id = store.get('backupGist', null);
+        const opts = { method: id ? 'PATCH' : 'POST', body: id ? body : JSON.stringify(Object.assign(JSON.parse(body), { public: false })), keepalive };
+        let gist;
+        try { gist = await Backup.gh(id ? '/gists/' + id : '/gists', opts); }
+        catch (e) {
+          if (e.kind !== 'missing' || !id) throw e;
+          localStorage.removeItem('wp.backupGist');              // gist deleted on GitHub: make a new one
+          gist = await Backup.gh('/gists', { method: 'POST', body: JSON.stringify(Object.assign(JSON.parse(body), { public: false })) });
+        }
+        if (gist && gist.id) store.set('backupGist', gist.id);
+        Backup.savedAt = snap.savedAt;
+        Backup.remotePlaces = Backup.placesIn(snap.items);
+        Backup.setStatus('ok');
+      } catch (e) {
+        Backup.setStatus(e.kind === 'badkey' ? 'badkey' : e.kind === 'offline' ? 'offline' : 'error');
+        if (e.kind !== 'badkey') { clearTimeout(Backup.timer); Backup.timer = setTimeout(() => Backup.save(), 60000); }
+      } finally {
+        Backup.busy = false;
+        if (Backup.pending) { Backup.pending = false; Backup.save(); }
+      }
+    },
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && Backup.enabled() && store.get('localSavedAt', 0) > Backup.savedAt) Backup.save(false, true);
+  });
 
   async function fetchJSON(url, opts = {}, timeout = 15000) {
     const ctl = new AbortController();
@@ -805,8 +988,8 @@
     return s < 60 ? s + ' s ago' : s < 3600 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago';
   }
 
-  // The Waypoint logo + title is the location status: green outline = all
-  // good, red = a problem (select it to see why), pulsing grey = still finding you.
+  // The word "Waypoint" shows location status: white = all good (or still
+  // finding you), red = a problem — select it to see why.
   function renderLocBadge() {
     const b = $('brand-btn');
     if (!b) return;
@@ -825,7 +1008,8 @@
   function renderLocInfo() {
     const f = Loc.last, ph = Loc.phone;
     const rows = [
-      ['Status', Loc.status.msg],
+      ['Backup', Backup.label()],
+      ['Location', Loc.status.msg],
       ['Permission', Loc.perm],
       ['Last fix', f ? `${ago(f.t)}, ±${Math.round(f.accuracy || 0)} m` : 'none yet'],
       ['Fixes', String(Loc.fixes)],
@@ -969,7 +1153,10 @@
     pretty() { return Relay.code.slice(0, 4) + '-' + Relay.code.slice(4); },
 
     start(reset = false) {
-      if (reset || !store.get('pairCode', null)) store.set('pairCode', Relay.newCode());
+      if (reset) store.set('pairCode', Relay.newCode());
+      // A first-time code is automatic, not a change worth backing up (and it
+      // mustn't make a freshly wiped device look newer than its backup).
+      else if (!store.get('pairCode', null)) try { localStorage.setItem('wp.pairCode', JSON.stringify(Relay.newCode())); } catch { /* ignore */ }
       Relay.code = store.get('pairCode', null);
       if (Relay.es) { Relay.es.close(); Relay.es = null; }
       Relay.setStatus(false);
@@ -1587,12 +1774,19 @@
     b.className = 'btn'; b.dataset.action = 'mapmode'; b.textContent = 'Map: Facing up';
     $('btn-voice').after(b);
   }
-  history.replaceState({ s: 'home', d: 0 }, '', location.pathname + location.search + '#home');
+  // Keep a #sync= key across Waypoint's own screen changes by moving it into the query.
+  let bootSearch = location.search;
+  if (Backup.token && !new URLSearchParams(location.search).get('sync')) {
+    const qs = new URLSearchParams(location.search); qs.set('sync', Backup.token); bootSearch = '?' + qs.toString();
+  }
+  history.replaceState({ s: 'home', d: 0 }, '', location.pathname + bootSearch + '#home');
   renderHome();
   renderChips();
   show('home', 'none');
   Relay.start();
   Loc.start();
+  Backup.start();
+  try { if (sessionStorage.getItem('wp.restored')) { sessionStorage.removeItem('wp.restored'); setTimeout(() => toast('Restored your saved places and settings from GitHub ✓', 4500), 600); } } catch { /* ignore */ }
   renderLocBadge();
   if (DEMO) toast('Demo mode: walking is simulated', 3000);
   console.info('Waypoint', USE_MAPBOX ? 'using Mapbox' : 'using OpenStreetMap (Photon + Valhalla)', DEMO ? '[demo]' : '');

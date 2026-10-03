@@ -15,6 +15,22 @@ Built from the [Meta Wearables Web Apps docs](https://wearables.developer.meta.c
 
 If you go off the route by more than about 30 m, it plans a new one for you.
 
+## Backup to your GitHub
+
+Glasses software updates can wipe web apps' saved data. Waypoint keeps an encrypted copy of your **saved places, recent places, sound/voice choice (including a Google voice key), map setting and phone pairing** in a private gist in your own GitHub account, and restores it automatically. It works the same way as GlassCast's backup.
+
+**Setup (once):**
+1. Use the same GitHub key as GlassCast (a classic token with only the `gist` permission). Each app saves to its own gist, so they never overwrite each other. If you need a new key: github.com → profile picture → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token (classic). Set Expiration to No expiration, tick only `gist`, and copy the key (it starts `ghp_`).
+2. In the Meta AI app, edit Waypoint's address so it ends with `?sync=YOUR-KEY` (e.g. `https://<you>.github.io/waypoint/?sync=ghp_…`). If the address already has a `?`, use `&sync=` instead.
+3. Open Waypoint and select the **Waypoint** title on the home screen. The Status screen should say **Backup: Backed up · time**.
+
+**How it behaves:**
+- Changes are saved within about 3 seconds, and again when you leave the app.
+- After a wipe, Waypoint restores everything on the next launch and shows "Restored your saved places and settings from GitHub ✓". Your phone stays paired because the pairing code is restored too.
+- Everything is encrypted (AES-256) with a key derived from your GitHub token. The gist file `waypoint-backup.json` is unreadable without it.
+- If the backup was made with a different key, Waypoint leaves it untouched and says so. To start fresh, delete that gist at gist.github.com.
+- Your key lives only in the app address in the Meta AI app, never in the code or this repo. If it ever leaks, delete it in GitHub's token settings and make a new one.
+
 ## Sound and voice
 
 The glasses only have one built-in voice, and it isn't great. Waypoint gives you a choice. Change it any time from the route menu with **Sound: …**.
